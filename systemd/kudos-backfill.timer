@@ -1,0 +1,9 @@
+[Unit]
+Description=Weekly kudos backfill (Sun 2am)
+
+[Timer]
+OnCalendar=Sun *-*-* 02:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

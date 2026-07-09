@@ -1,0 +1,12 @@
+[Unit]
+Description=Llama embedding server (embeddinggemma-300m)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=llama-server --embeddings -hf unsloth/embeddinggemma-300m-GGUF --port 8002
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

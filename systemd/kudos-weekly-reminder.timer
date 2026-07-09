@@ -1,0 +1,9 @@
+[Unit]
+Description=Friday kudos reminder (3pm)
+
+[Timer]
+OnCalendar=Fri *-*-* 15:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

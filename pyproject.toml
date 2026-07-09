@@ -1,0 +1,37 @@
+[project]
+name = "kudos-bot"
+version = "1.0.0"
+requires-python = ">=3.12"
+dependencies = [
+    "slack-bolt>=1.28.0",
+    "slack-cli-hooks<1.0.0",
+    "psycopg[binary]>=3.2.0",
+    "psycopg-pool>=3.2.0",
+    "python-dotenv>=1.0.0",
+    "pgvector>=0.4.2",
+    "statsmodels>=0.14.6",
+    "patsy>=1.0.2",
+    "sizecheck>=0.3.0",
+    "dash>=4.4.0",
+    "plotly>=6.9.0",
+    "matplotlib>=3.11.0",
+    "scikit-learn>=1.9.0",
+    "dash-bootstrap-components>=2.0.4",
+    "dash-bootstrap-templates>=2.1.0",
+    "dash-ag-grid>=35.2.0",
+    "pandas>=3.0.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.uv.sources]
+sizecheck = { git = "https://github.com/samanklesaria/sizecheck.git" }
+vmf-mml = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "chromedriver-autoinstaller>=0.6.4",
+    "dash[testing]>=4.4.0",
+    "pytest>=9.1.1",
+]

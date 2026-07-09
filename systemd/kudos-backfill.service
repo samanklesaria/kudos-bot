@@ -1,0 +1,10 @@
+[Unit]
+Description=Kudos backfill embeddings and clusters
+After=postgresql.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/kudos
+EnvironmentFile=/opt/kudos/.env
+ExecStart=/opt/kudos/.venv/bin/python cron/backfill.py
+ExecStartPost=/usr/bin/systemctl restart kudos-dashboard.service

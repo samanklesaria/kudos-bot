@@ -1,0 +1,12 @@
+[Unit]
+Description=Llama chat server (Gemma 4 E2B)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=llama-server -hf unsloth/gemma-4-E2B-it-qat-GGUF:UD-Q4_K_XL --temp 1.0 --top-p 0.95 --top-k 64 --port 8001 --chat-template-kwargs '{"enable_thinking":false}'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=Kudos weekly reminder DMs
+After=postgresql.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/kudos
+EnvironmentFile=/opt/kudos/.env
+ExecStart=/opt/kudos/.venv/bin/python cron/weekly_reminder.py

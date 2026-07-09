@@ -1,0 +1,50 @@
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE kudos (
+    id SERIAL PRIMARY KEY,
+    giver_id TEXT NOT NULL,
+    recipient_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    message_ts TEXT NOT NULL,
+    message_text TEXT,
+    redeemed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ,
+    embedding vector(128),
+    CHECK(giver_id <> recipient_id)
+);
+
+CREATE TABLE users (
+    id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL
+);
+
+CREATE TABLE budgets (
+    month_date DATE PRIMARY KEY,  -- 1st of the month
+    point_budget INTEGER NOT NULL,
+    conversion_rate NUMERIC NOT NULL
+);
+
+CREATE TABLE clusters (
+    id SERIAL PRIMARY KEY,
+    summary TEXT NOT NULL,
+    center vector(128) NOT NULL
+);
+
+CREATE TABLE cluster_members (
+    cluster_id INTEGER NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
+    kudos_id INTEGER NOT NULL REFERENCES kudos(id),
+    PRIMARY KEY (cluster_id, kudos_id)
+);
+
+CREATE TABLE predictions (
+    metric TEXT PRIMARY KEY,
+    lower NUMERIC,
+    upper NUMERIC,
+    median NUMERIC
+);
+
+CREATE INDEX idx_kudos_recipient ON kudos(recipient_id);
+CREATE INDEX idx_kudos_giver_day ON kudos(giver_id, created_at) WHERE deleted_at IS NULL;
+CREATE INDEX idx_kudos_giver_recipient_month ON kudos(giver_id, recipient_id, created_at) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX idx_kudos_channel_ts_active ON kudos(channel_id, message_ts) WHERE deleted_at IS NULL;

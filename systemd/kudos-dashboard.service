@@ -1,0 +1,15 @@
+[Unit]
+Description=Kudos Shiny Dashboard
+After=postgresql.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/kudos
+EnvironmentFile=/opt/kudos/.env
+Environment=DASH_PROD=1
+ExecStart=/opt/kudos/.venv/bin/python dash_app.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

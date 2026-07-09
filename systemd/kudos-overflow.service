@@ -1,0 +1,9 @@
+[Unit]
+Description=Kudos overflow redemption processing
+After=postgresql.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/kudos
+EnvironmentFile=/opt/kudos/.env
+ExecStart=/opt/kudos/.venv/bin/python cron/overflow.py
