@@ -72,20 +72,42 @@ def load_cluster_messages(cluster_id, month):
         ORDER BY k.created_at DESC LIMIT 50""",
         {"cid": cluster_id, "month": month})
 
+def load_covariates():
+    return query("SELECT * FROM covariates ORDER BY label, week")
+
 def fit_its(df):
-    """Fit Poisson GLM: redeemed ~ C(conversion_rate, Diff). Return IRR df + forecast."""
+    """Fit Poisson GLM: redeemed ~ C(conversion_rate, Diff) [+ covariates]. Return IRR df + forecast."""
     model_df = pd.DataFrame({"y": df["redeemed"].astype(float),
-        "t": df["conversion_rate"].astype(float)})
-    fit = smf.glm("y ~ C(t, Diff)", data=model_df,
+        "t": df["conversion_rate"].astype(float),
+        "yw": df["yw"]})
+    covs = load_covariates()
+    cov_names = []
+    if not covs.empty:
+        for label, grp in covs.groupby("label"):
+            if grp["value"].nunique() <= 1:
+                continue
+            cov_map = dict(zip(grp["week"], grp["value"].astype(float)))
+            model_df[label] = model_df["yw"].map(cov_map)
+            if model_df[label].isna().any():
+                model_df = model_df.drop(columns=[label])
+            else:
+                cov_names.append(label)
+    formula = "y ~ C(t, Diff)" + "".join(f" + {c}" for c in cov_names)
+    model_df = model_df.drop(columns=["yw"])
+    fit = smf.glm(formula, data=model_df,
         family=sm.families.Poisson()).fit()
-    # IRR table: skip intercept, exponentiate difference coefficients only
+    # IRR table: skip intercept and covariates, exponentiate difference coefficients only
     unique_rates = sorted(model_df["t"].unique())
-    betas, ses = fit.params[1:], fit.bse[1:]
+    n_diff = len(unique_rates) - 1
+    betas, ses = fit.params[1:1 + n_diff], fit.bse[1:1 + n_diff]
     irr_rows = [dict(rate=r, irr=np.exp(b), lo=np.exp(b - 1.96 * se), hi=np.exp(b + 1.96 * se))
         for r, b, se in zip(unique_rates[1:], betas, ses)]
     irr_df = pd.DataFrame(irr_rows)
     # Forecast next week at latest conversion rate (prediction interval)
-    pred = fit.get_prediction(pd.DataFrame({"t": [unique_rates[-1]]}))
+    pred_data = pd.DataFrame({"t": [unique_rates[-1]]})
+    for c in cov_names:
+        pred_data[c] = [model_df[c].iloc[-1]]
+    pred = fit.get_prediction(pred_data)
     mu = pred.predicted[0]
     lo = stats.poisson.ppf(0.025, mu)
     hi = stats.poisson.ppf(0.975, mu)

@@ -37,11 +37,11 @@ CREATE TABLE cluster_members (
     PRIMARY KEY (cluster_id, kudos_id)
 );
 
-CREATE TABLE predictions (
-    metric TEXT PRIMARY KEY,
-    lower NUMERIC,
-    upper NUMERIC,
-    median NUMERIC
+CREATE TABLE covariates (
+    label VARCHAR(64) NOT NULL,
+    week VARCHAR(8) NOT NULL,
+    value NUMERIC NOT NULL,
+    PRIMARY KEY (label, week)
 );
 
 CREATE INDEX idx_kudos_recipient ON kudos(recipient_id);

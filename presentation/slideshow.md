@@ -1,31 +1,23 @@
 # Kudos Bot
 
-Peer recognition programs fail when they're hard to use or easy to game. Kudos Bot makes giving praise as simple as a Slack message — and makes abuse structurally impossible rather than policy-dependent.
+Peer recognition programs fail when they're hard to use or easy to game. *Kudos Bot* makes giving praise as simple as a Slack message — and makes abuse structurally impossible rather than policy-dependent.
 
 # The Problem
 
 ```mermaid
 graph LR
-    A["Forms, portals,<br>manager approval"] -->|"Kudos Bot"| B["One Slack message"]
+    A["Forms, portals,<br>manager approval"] -->|"Slack Bot"| B["One Slack message"]
     C["Reciprocal<br>farming"] -->|"Reciprocity +<br>LLM gate"| D["Must give genuine<br>praise to earn"]
     E["Unknown effect of<br>budget on activity"] -->|"ITS dashboard"| F["Causal estimation<br>of spend impact"]
 ```
-
-# Demo: Slack Bot
-
-Live demo: onboarding, content check, edit-to-fix, error handling, and private channel rejection.
-
-# Demo: Dashboard
-
-Live demo: operational snapshot, usage & budget forecast, treatment effect plot, leaderboard, and topic drill-down.
 
 # Design Principles
 
 ```mermaid
 graph TD
-    A["Simple for the giver<br>@kudos-bot @jane Great retro!"] --> B["Hard to game<br>DB constraints,<br>not app rules"]
-    A --> C["Budget control<br>Monthly cap with<br>FIFO overflow"]
-    A --> D["Measurable<br>Causal effect<br>estimation"]
+    A["<b>Simple for the giver</b><br>@kudos @jane Great retro!"] --> B["<b>Hard to game</b><br>Rate limits, public channels,<br>LLM content gate"]
+    A --> C["<b>Budget control</b><br>Monthly cap with<br>FIFO overflow"]
+    A --> D["<b>Measurable</b><br>Causal effect<br>estimation"]
 ```
 
 # Reciprocity: You Earn by Giving
@@ -45,19 +37,13 @@ Bob has 7 unredeemed kudos. He earns his next payout by recognizing someone else
 
 ```mermaid
 graph LR
-    subgraph Database
-        L1["CHECK constraint<br>no self-kudos"]
-        L2["Advisory lock<br>per-user serialization"]
-        L3["Rate limits<br>1/day, 1/recipient/month"]
-        L4["UNIQUE index<br>idempotent inserts"]
-    end
-    subgraph Application
-        L5["LLM content gate<br>YES/NO, max_tokens=5"]
-        L6["Public channels only<br>no shadow networks"]
-    end
+    L1["No self-kudos"] --> L2["Rate limits<br>1/day, 1/recipient/month"]
+    L2 --> L3["Public channels only<br>no shadow networks"]
+    L3 --> L4["LLM content gate<br>rejects vague praise"]
 ```
 
-Every layer is enforced at the database or infrastructure level — not application code that can be bypassed.
+- Rate limits and public channels prevent reciprocal farming
+- LLM gate produces a written record that praise was substantive — if a claim is false, the org won't be liable
 
 # Budget Control
 
@@ -72,13 +58,21 @@ graph LR
 
 Accounting is notified on the first rollover. A dashboard tracks queue depth over time so chronic underbudgeting is visible.
 
+# Demo: Slack Bot
+
+Live demo: onboarding, content check, edit-to-fix, error handling, and private channel rejection.
+
+# Demo: Dashboard
+
+Live demo: operational snapshot, usage & budget forecast, treatment effect plot, leaderboard, and topic drill-down.
+
 # Architecture
 
-All business logic lives in Postgres functions. The Python app is a 131-line event router.
+All business logic lives in Postgres functions. The Python app is a 150-line event router.
 
 ```mermaid
 graph LR
-    S["Slack event"] --> A["app.py<br>131 lines"]
+    S["Slack event"] --> A["app.py<br>150 lines"]
     A --> GK["give_kudos()"]
     GK --> CL["check_kudos_limits()<br>advisory lock"]
     GK --> TR["try_redeem()<br>budget lock, FIFO"]
@@ -90,18 +84,19 @@ Edits delete the old point and re-evaluate from scratch. Deletions remove the po
 
 # Scheduled Jobs
 
-```mermaid
-graph LR
-    O["overflow.py<br><i>monthly</i>"] --> B["Process queued<br>redemptions against<br>new budget"]
-    W["weekly_reminder.py<br><i>weekly</i>"] --> R["DM inactive<br>users"]
-    BF["backfill.py<br><i>weekly</i>"] --> E["Embed, cluster &<br>LLM-summarize"]
-```
+| Script | Frequency | Purpose |
+|--------|-----------|---------|
+| `overflow.py` | Monthly | Process queued redemptions against new budget |
+| `weekly_reminder.py` | Weekly | DM users who haven't given kudos |
+| `backfill.py` | Weekly | Embed kudos, cluster, LLM-summarize topics |
+| `record_users.py` | Weekly | Record covariates and feed to Poisson GLM |
 
 # Treatment Effect Estimation
 
-Assuming counterfactual stationarity, a Poisson GLM with successive difference contrasts estimates the causal effect of conversion-rate changes as incidence rate ratios. The same model forecasts next week's redemptions.
+Poisson GLM with difference contrasts on conversion rate, adjusted for weekly covariates (user count, workday fraction, channel volume). Same model forecasts next week.
 
-![Treatment Effect](irr_plot.png){height=45%}
+```{.run cmd="uv run irr_plot.py"}
+```
 
 # Topic Clustering
 
@@ -120,7 +115,7 @@ Representative messages (nearest 25% to centroid) are sampled and summarized by 
 \includegraphics[height=1.2cm]{logos/postgres.png} &
 \includegraphics[height=1.2cm]{logos/python.png} &
 \includegraphics[height=1.2cm]{logos/dash.png} &
-\includegraphics[width=3cm]{logos/statsmodels.png} \\[4pt]
+\includegraphics[height=1.2cm]{logos/statsmodels.png} \\[4pt]
 \small Slack & \small Postgres & \small Python & \small Dash & \small statsmodels \\[14pt]
 \includegraphics[height=1.2cm]{logos/sklearn.png} &
 \includegraphics[height=1.2cm]{logos/llamacpp.png} &
@@ -132,13 +127,13 @@ Representative messages (nearest 25% to centroid) are sampled and summarized by 
 
 # Lines of Code
 
-722 lines total — bot, dashboard, cron jobs, schema, and all business logic.
+823 lines total — bot, dashboard, cron jobs, schema, and all business logic.
 
 | Component | Lines |
 |-----------|------:|
-| Python    |   514 |
-| SQL       |   208 |
-| **Total** | **722** |
+| Python    |   607 |
+| SQL       |   216 |
+| **Total** | **823** |
 
 # AI in Development
 

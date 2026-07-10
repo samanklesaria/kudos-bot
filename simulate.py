@@ -56,14 +56,29 @@ def build_topic_weights(rng):
     w_MT /= w_MT.sum(axis=1, keepdims=True)
     return w_MT
 
-def simulate_ITS_counts(rng):
-    "Simulate weekly counts from a Negative Binomial ITS"
+def simulate_covariates(rng):
+    """Simulate weekly covariates: num_users, workday_frac, channel_messages."""
+    W = N_MONTHS * 4
+    num_users = 20 + np.cumsum(rng.integers(2, 6, size=N_MONTHS))
+    num_users_W = np.repeat(num_users, 4) + rng.integers(-2, 3, size=W)
+    # Most weeks are full; ~15% have a holiday
+    workday_frac_W = np.where(rng.random(W) < 0.85, 1.0, rng.choice([0.6, 0.8], size=W))
+    # Channel messages scale with users, plus noise
+    channel_messages_W = (num_users_W * rng.uniform(8, 15, size=W)).astype(int)
+    return {"num_users": num_users_W, "workday_frac": workday_frac_W,
+        "channel_messages": channel_messages_W}
+
+def simulate_ITS_counts(rng, covariates):
+    "Simulate weekly counts from a Poisson ITS with covariates"
     months = np.arange(N_MONTHS)
     beta = np.full(N_MONTHS, 4.0)
     beta[1:] = 0.50 / months[1:] ** 0.5
     data = {'t': np.repeat(months, 4)}
     X = np.asarray(patsy.dmatrix("C(t, Diff)", data))
-    mu = np.exp(X @ beta)
+    cov_effect = (0.02 * covariates["num_users"]
+        + 0.3 * covariates["workday_frac"]
+        + 0.001 * covariates["channel_messages"])
+    mu = np.exp(X @ beta + cov_effect)
     dist = sm.families.Poisson().get_distribution(mu)
     return dist.rvs(random_state=rng).reshape((N_MONTHS, 4))
 
@@ -72,10 +87,10 @@ def clear_db(conn):
     conn.execute("DELETE FROM clusters")
     conn.execute("DELETE FROM kudos")
     conn.execute("DELETE FROM budgets")
-    conn.execute("DELETE FROM predictions")
+    conn.execute("DELETE FROM covariates")
     conn.execute("DELETE FROM users")
 
-def write_db(users, budgets, records, rng):
+def write_db(users, budgets, records, rng, covariates, now):
     with psycopg.connect(DATABASE_URL) as conn:
         clear_db(conn)
         for display_name in users:
@@ -85,6 +100,14 @@ def write_db(users, budgets, records, rng):
             conn.execute(
                 "INSERT INTO budgets (month_date, point_budget, conversion_rate) VALUES (%s, %s, %s)",
                 (cfg["month_date"], cfg["point_budget"], cfg["conversion_rate"]))
+        for label, values in covariates.items():
+            for w, val in enumerate(values):
+                week_date = week_to_date(now, w)
+                yw = week_date.isocalendar()
+                week_str = f"{yw[0]:04d}-{yw[1]:02d}"
+                conn.execute(
+                    "INSERT INTO covariates (label, week, value) VALUES (%s, %s, %s)",
+                    (label, week_str, float(val)))
         for i, (giver, recipient, text, kudos_at) in enumerate(records):
             should_redeem = rng.random() < 0.7
             redeemed_at = kudos_at + timedelta(hours=float(rng.exponential(48))) if should_redeem else None
@@ -124,13 +147,14 @@ def main(seed=42):
     texts, targets = load_messages()
     now = date.today().replace(day=1)
     budgets = make_budgets(now)
+    covariates = simulate_covariates(rng)
     weights_MT = build_topic_weights(rng)
-    counts_M4 = simulate_ITS_counts(rng)
+    counts_M4 = simulate_ITS_counts(rng, covariates)
     texts_S, weeks_S = choose_texts(counts_M4, texts, targets, weights_MT, rng)
     with open(USERNAMES_FILE) as f:
         users = [line.strip() for line in f if line.strip()]
     records = list(events(now, users, texts_S, weeks_S, rng))
-    write_db(users, budgets, records, rng)
+    write_db(users, budgets, records, rng, covariates, now)
     backfill()
 
 if __name__ == "__main__":

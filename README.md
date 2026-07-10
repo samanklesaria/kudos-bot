@@ -25,6 +25,7 @@ cron/
   overflow.py           Monthly: process queued redemptions against new budget
   weekly_reminder.py    Weekly: DM users who haven't given kudos
   backfill.py           Weekly: embed kudos messages, cluster, LLM-summarize topics
+  record_users.py       Weekly: record covariates (num_users, workday_frac, channel_messages)
 schema/
   schema.sql            Tables, indexes, CHECK constraints
   views_and_functions.sql  Views and PL/pgSQL functions (give_kudos, try_redeem, etc.)
@@ -34,6 +35,17 @@ tests/
   test_dashboard.py     Playwright tests for all dashboard panels
 simulate.py             Synthetic data generator for demo/testing
 ```
+
+### Schema
+
+| Table | Purpose |
+|---|---|
+| `kudos` | Every kudos event (giver, recipient, message, embedding, timestamps) |
+| `users` | Slack user ID → display name |
+| `budgets` | Monthly point budget and conversion rate |
+| `covariates` | Weekly time-varying covariates keyed by `(label, week)` — `num_users`, `workday_frac`, `channel_messages` |
+| `clusters` | KMeans cluster centers with LLM-generated summary labels |
+| `cluster_members` | Kudos → cluster membership |
 
 ### Slack Events
 
@@ -59,7 +71,7 @@ The Dash app (`dash_app.py`) provides:
 
 - **Operational snapshot** — current budget, spent this month, queued count
 - **Usage & budget** — weekly acquired/redeemed bars with budget line and Poisson forecast
-- **Treatment effect** — IRR plot from a Poisson GLM with successive difference contrasts
+- **Treatment effect** — IRR plot from a Poisson GLM with successive difference contrasts, adjusted for time-varying covariates (`num_users`, `workday_frac`, `channel_messages`) when they vary
 - **Leaderboard** — points received per person
 - **Topic evolution** — streamgraph of LLM-labeled topic clusters with drill-down to messages
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")"
-pandoc slideshow.md -t beamer --pdf-engine=xelatex -L mermaid.lua \
+pandoc slideshow.md -t beamer --pdf-engine=xelatex -L mermaid.lua -L run.lua \
   -V theme=metropolis \
   -V colortheme=default \
   -V fontsize=12pt \
