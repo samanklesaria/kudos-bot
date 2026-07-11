@@ -6,8 +6,7 @@ After=postgresql.service
 Type=simple
 WorkingDirectory=/opt/kudos
 EnvironmentFile=/opt/kudos/.env
-Environment=DASH_PROD=1
-ExecStart=/opt/kudos/.venv/bin/python dash_app.py
+ExecStart=/opt/kudos/.venv/bin/gunicorn dash_app:server --bind 0.0.0.0:8050
 Restart=on-failure
 RestartSec=5
 

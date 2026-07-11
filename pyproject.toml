@@ -20,7 +20,7 @@ dependencies = [
     "dash-bootstrap-templates>=2.1.0",
     "dash-ag-grid>=35.2.0",
     "pandas>=3.0.3",
-    "gapstatistics>=0.1.5",
+    "gunicorn>=26.0.0",
 ]
 
 [tool.pytest.ini_options]

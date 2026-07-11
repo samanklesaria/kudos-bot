@@ -60,17 +60,20 @@ def load_stream():
 
 def load_cluster_messages(cluster_id, month):
     return query("""
-        SELECT ug.display_name AS giver, ur.display_name AS recipient,
-               k.message_text AS message, k.created_at::date AS date
-        FROM kudos k
-        JOIN cluster_members cm ON cm.kudos_id = k.id
-        JOIN users ug ON ug.id = k.giver_id
-        JOIN users ur ON ur.id = k.recipient_id
-        WHERE cm.cluster_id = %(cid)s
-          AND to_char(k.created_at, 'YYYY-MM') = %(month)s
-          AND k.deleted_at IS NULL
-        ORDER BY k.created_at DESC LIMIT 50""",
+        SELECT km.giver, km.recipient, km.message, km.date
+        FROM kudos_messages km
+        JOIN cluster_members cm ON cm.kudos_id = km.id
+        WHERE cm.cluster_id = %(cid)s AND km.month = %(month)s
+        ORDER BY km.date DESC LIMIT 50""",
         {"cid": cluster_id, "month": month})
+
+def load_user_messages(display_name):
+    return query("""
+        SELECT giver, recipient, message, date
+        FROM kudos_messages
+        WHERE recipient = %(name)s
+        ORDER BY date DESC LIMIT 50""",
+        {"name": display_name})
 
 def load_covariates():
     return query("SELECT * FROM covariates ORDER BY label, week")
@@ -124,6 +127,7 @@ def fit_its(df):
 load_figure_template("flatly")
 
 app = Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
+server = app.server
 app.layout = dbc.Container([
     dbc.Row(dbc.Col(html.H1("Kudos Dashboard", className="my-3"))),
     dcc.Tabs([
@@ -132,7 +136,12 @@ app.layout = dbc.Container([
             dcc.Graph(id="usage-plot", style={"height": "450px"}),
             dcc.Graph(id="irr-plot", style={"height": "400px"})]),
         dcc.Tab(label="Leaderboard", children=[
-            dcc.Graph(id="leaderboard-plot")]),
+            dcc.Graph(id="leaderboard-plot"),
+            html.Div(id="leaderboard-label", className="my-2 fw-bold"),
+            dag.AgGrid(id="leaderboard-table", defaultColDef={"resizable": True, "sortable": True,
+                "wrapText": True, "autoHeight": True, "cellStyle": {"lineHeight": "1.4"}},
+                dashGridOptions={"pagination": True, "paginationPageSize": 20,
+                    "rowStyle": {"paddingTop": "2px", "paddingBottom": "2px"}})]),
         dcc.Tab(label="Topics", children=[
             dcc.Graph(id="stream-plot"),
             html.Div(id="topic-label", className="my-2 fw-bold"),
@@ -238,6 +247,20 @@ def update_leaderboard(_):
     return fig
 
 @callback(
+    Output("leaderboard-label", "children"),
+    Output("leaderboard-table", "columnDefs"),
+    Output("leaderboard-table", "rowData"),
+    Input("leaderboard-plot", "clickData"))
+def drill_leaderboard(click):
+    cols = [{"field": "giver", "flex": 1}, {"field": "recipient", "flex": 1},
+        {"field": "message", "flex": 11}]
+    if not click:
+        return "Click a name to see messages.", cols, []
+    name = click["points"][0]["y"]
+    msgs = load_user_messages(name)
+    return f"Messages for {name}", cols, msgs.to_dict("records") if not msgs.empty else []
+
+@callback(
     Output("stream-plot", "figure"),
     Output("stream-data", "data"),
     Input("stream-plot", "id"))
@@ -295,4 +318,4 @@ def drill_topic(click, store):
     return f"Topic: {summary} ({month})", cols, msgs.to_dict("records")
 
 if __name__ == "__main__":
-    app.run(debug=not os.environ.get("DASH_PROD"))
+    app.run(debug=os.environ.get("DASH_DEBUG"))

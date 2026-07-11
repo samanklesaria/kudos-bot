@@ -94,7 +94,7 @@ The Dash app (`dash_app.py`) provides:
 | `CHAT_URI` | Yes | OpenAI-compatible chat completions endpoint |
 | `EMBEDDING_URI` | Yes | OpenAI-compatible embeddings endpoint |
 | `KUDOS_ACCOUNTING_CHANNEL` | No | Slack channel ID for budget/audit alerts |
-| `DASH_PROD` | No | Set to disable Dash debug mode |
+| `DASH_DEBUG` | No | Set to enable Dash debug mode |
 
 ### Running
 

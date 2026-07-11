@@ -204,6 +204,17 @@ SELECT month, cluster_id, summary, frac FROM (
 WHERE frac >= 0.1
 ORDER BY month, summary;
 
+-- All kudos with giver/recipient display names, for drill-down tables.
+CREATE VIEW kudos_messages AS
+SELECT k.id, k.giver_id, k.recipient_id,
+       ug.display_name AS giver, ur.display_name AS recipient,
+       k.message_text AS message, k.created_at::date AS date,
+       to_char(k.created_at, 'YYYY-MM') AS month
+FROM kudos k
+JOIN users ug ON ug.id = k.giver_id
+JOIN users ur ON ur.id = k.recipient_id
+WHERE k.deleted_at IS NULL;
+
 -- Soft-delete a kudos. Returns one row per deleted kudos, or no rows if not found.
 CREATE FUNCTION delete_kudos(p_channel_id TEXT, p_message_ts TEXT)
 RETURNS TABLE(was_redeemed BOOLEAN, recipient TEXT) AS $fn$
