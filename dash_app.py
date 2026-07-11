@@ -82,6 +82,7 @@ def fit_its(df):
         "yw": df["yw"]})
     covs = load_covariates()
     cov_names = []
+    exposure = None
     if not covs.empty:
         for label, grp in covs.groupby("label"):
             if grp["value"].nunique() <= 1:
@@ -90,12 +91,17 @@ def fit_its(df):
             model_df[label] = model_df["yw"].map(cov_map)
             if model_df[label].isna().any():
                 model_df = model_df.drop(columns=[label])
+            elif label == "workday_frac":
+                exposure = model_df.pop(label)
             else:
+                if label == "channel_messages":
+                    model_df[label] = np.log(model_df[label])
                 cov_names.append(label)
     formula = "y ~ C(t, Diff)" + "".join(f" + {c}" for c in cov_names)
     model_df = model_df.drop(columns=["yw"])
     fit = smf.glm(formula, data=model_df,
-        family=sm.families.Poisson()).fit()
+        family=sm.families.Poisson(),
+        exposure=exposure).fit()
     # IRR table: skip intercept and covariates, exponentiate difference coefficients only
     unique_rates = sorted(model_df["t"].unique())
     n_diff = len(unique_rates) - 1

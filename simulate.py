@@ -76,9 +76,8 @@ def simulate_ITS_counts(rng, covariates):
     data = {'t': np.repeat(months, 4)}
     X = np.asarray(patsy.dmatrix("C(t, Diff)", data))
     cov_effect = (0.02 * covariates["num_users"]
-        + 0.3 * covariates["workday_frac"]
-        + 0.001 * covariates["channel_messages"])
-    mu = np.exp(X @ beta + cov_effect)
+        + 0.001 * np.log(covariates["channel_messages"]))
+    mu = covariates["workday_frac"] * np.exp(X @ beta + cov_effect)
     dist = sm.families.Poisson().get_distribution(mu)
     return dist.rvs(random_state=rng).reshape((N_MONTHS, 4))
 

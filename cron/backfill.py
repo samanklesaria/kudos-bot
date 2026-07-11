@@ -10,6 +10,7 @@ from pgvector.psycopg import register_vector
 from dotenv import load_dotenv
 from collections import Counter
 from sklearn.cluster import KMeans
+from gapstatistics.gapstatistics import GapStatistics
 
 load_dotenv()
 DATABASE_URL = os.environ["DATABASE_URL"]
@@ -73,13 +74,30 @@ def backfill_clusters(conn):
     month_counts = Counter(months)
     sample_weight = np.array([1.0 / np.log(1 + month_counts[m]) for m in months])
     n_months = len(month_counts)
-    k = min(n_months + 3, len(rows) - 1)
-    print(f"Clustering {len(rows)} kudos (k={k})...")
+    # Load previous cluster centers to warm-start and set a floor on k
+    prev_centers = conn.execute("SELECT center FROM clusters ORDER BY id").fetchall()
+    prev_centers = np.array([r[0] for r in prev_centers]) if prev_centers else None
+    min_k = len(prev_centers) if prev_centers is not None else 1
+    max_k = min(n_months + 3, len(rows) - 1)
+    print(f"Clustering {len(rows)} kudos (max_k={max_k}, min_k={min_k})...")
 
-    model = KMeans(n_clusters=k, n_init=10).fit(embeddings, sample_weight=sample_weight)
+    gap = GapStatistics()
+    labels = gap.fit_predict(max_k, embeddings)
+    k = max(len(set(labels)), min_k)
+    # Warm-start from previous centers, pad with k-means++ if k grew
+    if prev_centers is not None and len(prev_centers) <= k:
+        if len(prev_centers) == k:
+            init = prev_centers
+        else:
+            # Fill extra centers via a preliminary k-means++ on residual
+            extra = KMeans(n_clusters=k - len(prev_centers), n_init=1).fit(embeddings)
+            init = np.vstack([prev_centers, extra.cluster_centers_])
+        model = KMeans(n_clusters=k, init=init, n_init=1).fit(embeddings, sample_weight=sample_weight)
+    else:
+        model = KMeans(n_clusters=k, n_init=10).fit(embeddings, sample_weight=sample_weight)
     labels = model.labels_
     centers = model.cluster_centers_
-    print(f"  Done (k={k}).")
+    print(f"  Done (optimal k={k} from max {max_k}).")
 
     # Write clusters to DB
     conn.execute("DELETE FROM cluster_members")
