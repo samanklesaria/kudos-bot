@@ -199,10 +199,17 @@ def update_usage(_):
     fig.add_trace(go.Scatter(x=df["x"] - 0.5, y=weekly_budget, name="Budget/4",
         mode="lines", line=dict(dash="dot", color="red")))
 
-    # Month labels on x-axis
+    # Month labels on x-axis + dollar budget annotations
     month_ticks = df.groupby("ym")["x"].first()
+    month_budgets = df.groupby("ym").first()
+    dollar_annotations = [dict(
+        x=month_ticks[ym] - 0.5, y=float(month_budgets.loc[ym, "point_budget"]) / 4,
+        text=f"${int(month_budgets.loc[ym, 'point_budget'] * month_budgets.loc[ym, 'conversion_rate'])}",
+        showarrow=False, yshift=10, font=dict(color="red", size=10))
+        for ym in month_ticks.index]
     fig.update_layout(
         barmode="group", title="Weekly Kudos Acquired & Redeemed",
+        annotations=dollar_annotations,
         xaxis=dict(tickvals=month_ticks.values, ticktext=[
             pd.Timestamp(m + "-01").strftime("%b %Y") for m in month_ticks.index]),
         yaxis_title="Points", legend=dict(orientation="h", y=1.12))
