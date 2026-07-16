@@ -16,7 +16,7 @@ graph LR
 ```mermaid
 graph TD
     A["<b>Simple for the giver</b><br>@kudos @jane Great retro!"] --> B["<b>Hard to game</b><br>Rate limits, public channels,<br>LLM content gate"]
-    A --> C["<b>Budget control</b><br>Monthly cap with<br>FIFO overflow"]
+    A --> C["<b>Budget control</b><br>Monthly cap"]
     A --> D["<b>Measurable</b><br>Causal effect<br>estimation"]
 ```
 
@@ -37,9 +37,9 @@ Bob has 7 unredeemed kudos. He earns his next payout by recognizing someone else
 
 ```mermaid
 graph LR
-    L1["No self-kudos"] --> L2["Rate limits<br>1/day, 1/recipient/month"]
-    L2 --> L3["Public channels only<br>no shadow networks"]
-    L3 --> L4["LLM content gate<br>rejects vague praise"]
+    L1["No self-kudos"] --> L2["Rate limits<br><i>1/day, 1/recipient/month</i>"]
+    L2 --> L3["Public channels only<br><i>no shadow networks</i>"]
+    L3 --> L4["LLM content gate<br><i>rejects vague praise</i>"]
 ```
 
 - Rate limits and public channels prevent reciprocal farming
@@ -47,16 +47,16 @@ graph LR
 
 # Budget Control
 
-Accounting sets a monthly point budget and conversion rate. When the budget is exhausted, payouts queue FIFO rather than being rejected. Queued claims draw from the *next* month's budget first, before new claims.
+Monthly point budget and conversion rate set by accounting. Over-budget kudos are marked as overflow — payout opportunity lost.
 
-```mermaid
-graph LR
-    M1["Month 1<br>budget=100<br>redeemed=100"] -- "12 queued" --> M2["Month 2<br>budget=100"]
-    M2 -- "first 12" --> Q["Queued claims<br>FIFO"]
-    M2 -- "remaining 88" --> N["New claims"]
-```
+|       | Time  | Given | Received | Budget Remaining | Redeemed |
+|-------|-------|------:|---------:|-----------------:|---------:|
+| Alice | 10:00 |     3 |        2 |                5 |        2 |
+| Bob   | 10:05 |     2 |        3 |                3 |        2 |
+| Alice | 11:00 |     4 |        3 |                1 |        3 |
+| Bob   | 11:05 |     3 |        4 |                0 |        2 |
 
-Accounting is notified on the first rollover. A dashboard tracks queue depth over time so chronic underbudgeting is visible.
+Bob's 3rd kudos arrived after the budget was exhausted — it overflows and he earns nothing despite being owed.
 
 # Demo: Slack Bot
 
@@ -74,8 +74,8 @@ All business logic lives in Postgres functions. The Python app is a 150-line eve
 graph LR
     S["Slack event"] --> A["app.py<br>150 lines"]
     A --> GK["give_kudos()"]
-    GK --> CL["check_kudos_limits()<br>advisory lock"]
-    GK --> TR["try_redeem()<br>budget lock, FIFO"]
+    GK --> CL["check_kudos_limits()"]
+    GK --> TR["try_redeem()<br>redeem or overflow"]
     TR --> A
     A --> Reply["Post reply"]
 ```
@@ -86,17 +86,20 @@ Edits delete the old point and re-evaluate from scratch. Deletions remove the po
 
 | Script | Frequency | Purpose |
 |--------|-----------|---------|
-| `overflow.py` | Monthly | Process queued redemptions against new budget |
+| `accounting.py` | Monthly | Report last month's redemptions to accounting channel |
 | `weekly_reminder.py` | Weekly | DM users who haven't given kudos |
 | `backfill.py` | Weekly | Embed kudos, cluster, LLM-summarize topics |
-| `record_users.py` | Weekly | Record covariates and feed to Poisson GLM |
+| `record_users.py` | Weekly | Record covariates for Poisson GLM |
 
 # Treatment Effect Estimation
 
-Poisson GLM with difference contrasts on conversion rate, adjusted for weekly covariates (user count, workday fraction, channel volume). Same model forecasts next week.
+- Pairwise IRR between consecutive conversion-rate periods
+- Redeemed counts $Y_j$, exposures $E_j = \sum (\text{workday\_frac} \times \text{num\_users})$
 
-```{.run cmd="uv run irr_plot.py"}
-```
+$$\text{IRR} = \frac{Y_2 / E_2}{Y_1 / E_1} \qquad \text{CI via score test inversion (Gu et al.)}$$
+
+- 90% confidence intervals on each IRR
+- Forecast: Poisson prediction scaled by next week's exposure
 
 # Topic Clustering
 
@@ -127,13 +130,13 @@ Representative messages (nearest 25% to centroid) are sampled and summarized by 
 
 # Lines of Code
 
-823 lines total — bot, dashboard, cron jobs, schema, and all business logic.
+832 lines total — bot, dashboard, cron jobs, schema, and all business logic.
 
 | Component | Lines |
 |-----------|------:|
-| Python    |   607 |
-| SQL       |   216 |
-| **Total** | **823** |
+| Python    |   630 |
+| SQL       |   202 |
+| **Total** | **832** |
 
 # AI in Development
 

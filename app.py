@@ -62,25 +62,23 @@ def _try_give_kudos(giver_id, recipient_id, channel_id, message_ts, text):
             (giver_id, recipient_id, channel_id, message_ts, text)).fetchone()
     if row is None:
         return
-    error, redeemed_amount, notify_budget, notify_queued = row
+    error, rate, redeemed_ids, notify_budget = row
     if error:
         app.client.chat_postMessage(channel=channel_id, text=error, thread_ts=message_ts)
         return
     msg = f"<@{giver_id}> gave kudos to <@{recipient_id}>!"
-    if redeemed_amount > 0:
-        msg += f" (<@{giver_id}> auto-redeemed 1 point — ${redeemed_amount:.2f})"
+    if redeemed_ids:
+        redeemed_str = " and ".join(f"<@{uid}>" for uid in redeemed_ids)
+        msg += f" ({redeemed_str} auto-redeemed 1 point — ${rate:.2f})"
+    unredeemed_ids = [uid for uid in (giver_id, recipient_id) if uid not in redeemed_ids]
+    if unredeemed_ids:
+        unredeemed_str = " and ".join(f"<@{uid}>" for uid in unredeemed_ids)
+        msg += f" ({unredeemed_str}'s point can't be redeemed — over budget this month.)"
     app.client.chat_postMessage(channel=channel_id, text=msg, thread_ts=message_ts)
-    if notify_queued:
-        app.client.chat_postMessage(
-            channel=channel_id,
-            text="Your kudos payout is queued because this month's budget is exhausted. "
-                 "It will be processed when budget is available.",
-            thread_ts=message_ts)
     if notify_budget and ACCOUNTING_CHANNEL:
         app.client.chat_postMessage(
             channel=ACCOUNTING_CHANNEL,
-            text=f"Budget alert: This month's kudos budget has been exhausted. "
-                 f"New redemptions are being queued.")
+            text=f"Budget alert: This month's kudos budget has been exhausted. ")
 
 @app.event("app_mention")
 def handle_mention(event, context):

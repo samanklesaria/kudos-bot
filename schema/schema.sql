@@ -2,15 +2,17 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TABLE kudos (
     id SERIAL PRIMARY KEY,
-    giver_id TEXT NOT NULL,
-    recipient_id TEXT NOT NULL,
-    channel_id TEXT NOT NULL,
-    message_ts TEXT NOT NULL,
+    giver_id VARCHAR(21) NOT NULL,
+    recipient_id VARCHAR(21) NOT NULL,
+    channel_id VARCHAR(21) NOT NULL,
+    message_ts VARCHAR(21) NOT NULL,
     message_text TEXT,
     redeemed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ,
     embedding vector(128),
+    giver_overflow BOOLEAN NOT NULL DEFAULT FALSE,
+    recipient_overflow BOOLEAN NOT NULL DEFAULT FALSE,
     CHECK(giver_id <> recipient_id)
 );
 
@@ -27,7 +29,7 @@ CREATE TABLE budgets (
 
 CREATE TABLE clusters (
     id SERIAL PRIMARY KEY,
-    summary TEXT NOT NULL,
+    summary VARCHAR(128) NOT NULL,
     center vector(128) NOT NULL
 );
 
@@ -48,3 +50,6 @@ CREATE INDEX idx_kudos_recipient ON kudos(recipient_id);
 CREATE INDEX idx_kudos_giver_day ON kudos(giver_id, created_at) WHERE deleted_at IS NULL;
 CREATE INDEX idx_kudos_giver_recipient_month ON kudos(giver_id, recipient_id, created_at) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX idx_kudos_channel_ts_active ON kudos(channel_id, message_ts) WHERE deleted_at IS NULL;
+CREATE INDEX idx_kudos_redeemed ON kudos(redeemed_at) WHERE deleted_at IS NULL AND redeemed_at IS NOT NULL;
+CREATE INDEX idx_kudos_unredeemed_recipient ON kudos(recipient_id, created_at)
+    WHERE redeemed_at IS NULL AND deleted_at IS NULL AND NOT recipient_overflow;

@@ -1,4 +1,4 @@
-"""Cron script: record weekly covariates (num_users, workday_frac, channel_messages)."""
+"""Cron script: record weekly covariates (num_users, workday_frac)."""
 import os
 import time
 from datetime import date, timedelta
@@ -28,25 +28,13 @@ for ch in channels:
 today = date.today()
 monday = today - timedelta(days=today.weekday())
 workdays = sum(1 for d in range(5) if (monday + timedelta(days=d)).isoweekday() <= 5)
-# ponytail: assumes no holiday calendar; add one if precision matters
 workday_frac = workdays / 5.0
 
-# ── channel_messages: total messages across bot channels this week ────
-week_start = time.mktime(monday.timetuple())
-total_messages = 0
-for ch in channels:
-    resp = client.conversations_history(channel=ch["id"],
-        oldest=str(week_start), limit=1, include_all_metadata=False)
-    total_messages += resp.get("total", 0) if resp.get("has_more") else len(resp.get("messages", []))
-# ponytail: conversations_history doesn't return a total count reliably;
-# paginating all messages is expensive. Using conversations.info num_messages
-# delta would be better at scale — revisit if channel volume is high.
 
 # ── write all covariates ──────────────────────────────────────────────
 covariates = [
     ("num_users", len(users)),
-    ("workday_frac", workday_frac),
-    ("channel_messages", total_messages)]
+    ("workday_frac", workday_frac)]
 
 with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
     for label, value in covariates:

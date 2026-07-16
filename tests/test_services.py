@@ -1,5 +1,4 @@
 import os
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import psycopg
@@ -31,13 +30,14 @@ def _set_budget(conn, points=100, rate=5.0):
 
 class GiveResult:
     """Wrapper for give_kudos return row. None row means silent no-op (duplicate message_ts)."""
-    def __init__(self, row):
+    def __init__(self, row, giver_id=None, recipient_id=None):
         if row is None:
-            self.error, self.amount, self.notify_budget, self.notify_queued = None, 0, False, False
+            self.error, self.rate, self.redeemed_ids, self.notify_budget = None, 0, [], False
             self._noop = True
         else:
-            self.error, self.amount, self.notify_budget, self.notify_queued = row
+            self.error, self.rate, self.redeemed_ids, self.notify_budget = row
             self._noop = False
+        self._giver, self._recipient = giver_id, recipient_id
 
     @property
     def success(self):
@@ -45,7 +45,15 @@ class GiveResult:
 
     @property
     def redeemed(self):
-        return self.amount > 0
+        return bool(self.redeemed_ids)
+
+    @property
+    def giver_amount(self):
+        return self.rate if self._giver in self.redeemed_ids else 0
+
+    @property
+    def recipient_amount(self):
+        return self.rate if self._recipient in self.redeemed_ids else 0
 
 def _give(conn, giver, recipient, ts, text=None, backdate_days=0):
     """Give kudos and optionally backdate it to bypass the daily cap."""
@@ -56,7 +64,7 @@ def _give(conn, giver, recipient, ts, text=None, backdate_days=0):
         conn.execute(
             "UPDATE kudos SET created_at = created_at - INTERVAL '%s days' WHERE message_ts = %s",
             (backdate_days, ts))
-    return GiveResult(row)
+    return GiveResult(row, giver, recipient)
 
 
 # ============================================================
@@ -130,7 +138,7 @@ def test_redeems_when_received_ge_given(conn):
     r = _give(conn, "U1", "U3", "1.002")
     assert r.success is True
     assert r.redeemed is True
-    assert r.amount == 5.0
+    assert r.giver_amount == 5.0
 
 def test_no_redeem_when_received_lt_given(conn):
     _set_budget(conn, points=100, rate=5.0)
@@ -178,120 +186,31 @@ def test_budget_exhaustion_does_not_re_notify(conn):
     r = _give(conn, "U5", "U6", "1.004")
     assert r.notify_budget is False
 
-def test_queued_user_notified_first_time(conn):
-    _set_budget(conn, points=1, rate=5.0)
-    _give(conn, "U2", "U1", "1.001", backdate_days=2)
-    _give(conn, "U1", "U3", "1.002", backdate_days=1)  # fills budget
-    _give(conn, "U3", "U5", "1.003", backdate_days=1)
-    r = _give(conn, "U5", "U6", "1.004")
-    assert r.redeemed is False
-    assert r.notify_queued is True
-
-def test_queued_user_not_re_notified(conn):
-    """Same user queued twice should only be notified once (count > 1)."""
-    _set_budget(conn, points=1, rate=5.0)
-    _give(conn, "U2", "U1", "1.001", backdate_days=3)
-    _give(conn, "U1", "U3", "1.002", backdate_days=2)  # fills budget
-    _give(conn, "U3", "U5", "1.003", backdate_days=2)
-    _give(conn, "U5", "U6", "1.004", backdate_days=1)  # first queue
-    _give(conn, "U7", "U5", "1.005", backdate_days=1)
-    r = _give(conn, "U5", "U8", "1.006")  # second queue
-    assert r.notify_queued is False
 
 
-# ============================================================
-# §3.3 — Overflow: monthly budget rollover
-# ============================================================
+def test_recipient_auto_redeems_when_receiving_tips_balance(conn):
+    """Receiving a kudos can trigger redemption of recipient's oldest giving row."""
+    _set_budget(conn, points=100, rate=5.0)
+    # U1 gives to U2 (U1 not owed, no redemption)
+    _give(conn, "U1", "U2", "1.001", backdate_days=2)
+    # U2 gives to U3 — U2 now has given=1. But received=1 (from 1.001). So U2 is owed!
+    r = _give(conn, "U2", "U3", "1.002", backdate_days=1)
+    # U2's give should auto-redeem (giver path)
+    assert r.giver_amount == 5.0
 
-
-def _overflow_redeem(conn):
-    """Run the same SQL as overflow.py: redeem pending up to remaining budget."""
-    return conn.execute(
-        "WITH to_redeem AS ("
-        "    SELECT pr.kudos_id AS id"
-        "    FROM pending_redemptions pr"
-        "    LIMIT COALESCE(("
-        "        SELECT GREATEST(0, eb.point_budget - redeemed_this_month())"
-        "        FROM effective_budget() eb), 0))"
-        " UPDATE kudos SET redeemed_at = NOW()"
-        "    FROM to_redeem WHERE kudos.id = to_redeem.id").rowcount
-
-def test_overflow_redeems_queued_points(conn):
-    """Queued points from a full budget get redeemed by overflow."""
-    _set_budget(conn, points=1, rate=5.0)
-    # U2→U1 so U1 has received=1
-    _give(conn, "U2", "U1", "1.001", backdate_days=3)
-    # U1→U3 redeems (fills budget=1)
-    r = _give(conn, "U1", "U3", "1.002", backdate_days=2)
-    assert r.redeemed is True
-    # U4→U5 so U5 has received=1
-    _give(conn, "U4", "U5", "1.003", backdate_days=2)
-    # U5→U6 can't redeem (budget full + overflow pending from U1)
-    r = _give(conn, "U5", "U6", "1.004", backdate_days=1)
-    assert r.redeemed is False
-    # New month budget
-    conn.execute(
-        "INSERT INTO budgets (month_date, point_budget, conversion_rate) "
-        "VALUES ((date_trunc('month', CURRENT_DATE) + interval '1 month')::date, 10, 5.0)")
-    # Simulate next month by shifting redeemed_at to last month
-    conn.execute(
-        "UPDATE kudos SET redeemed_at = redeemed_at - interval '1 month' "
-        "WHERE redeemed_at IS NOT NULL")
-    count = _overflow_redeem(conn)
-    assert count == 1
-    # Verify U5's kudos got redeemed
+def test_recipient_redeems_via_new_received_kudos(conn):
+    """When recipient gets a kudos, if they're owed, their giving row redeems."""
+    _set_budget(conn, points=100, rate=5.0)
+    # U2 gives to U3 — U2 has given=1, received=0, not owed
+    _give(conn, "U2", "U3", "1.001", backdate_days=2)
+    # U1 gives to U2 — U2 now has received=1. U2 is owed 1 (given=1, received=1).
+    # Recipient-path should redeem U2's giving row.
+    r = _give(conn, "U1", "U2", "1.002")
+    assert r.recipient_amount == 5.0
+    # Verify U2's received row (1.002) got redeemed
     redeemed = conn.execute(
-        "SELECT COUNT(*)::int FROM kudos WHERE redeemed_at IS NOT NULL AND deleted_at IS NULL"
-    ).fetchone()[0]
-    assert redeemed == 2
-
-def test_overflow_respects_remaining_budget(conn):
-    """Overflow should only use remaining budget, not the full budget."""
-    _set_budget(conn, points=3, rate=5.0)
-    # Create 3 pending redemptions by inserting directly
-    for i, (g, r) in enumerate([("U1", "U2"), ("U3", "U4"), ("U5", "U6")]):
-        conn.execute(
-            "INSERT INTO kudos (giver_id, recipient_id, channel_id, message_ts, created_at) "
-            "VALUES (%s, %s, 'C1', %s, NOW() - interval '10 days')",
-            (g, r, f"1.{i:03d}"))
-        # Give each giver a received kudos so they're owed
-        conn.execute(
-            "INSERT INTO kudos (giver_id, recipient_id, channel_id, message_ts, created_at) "
-            "VALUES (%s, %s, 'C1', %s, NOW() - interval '10 days')",
-            (r, g, f"2.{i:03d}"))
-    # Manually mark 1 as already redeemed this month (simulates inline redemption)
-    conn.execute(
-        "UPDATE kudos SET redeemed_at = NOW() WHERE message_ts = '1.000'")
-    # Overflow should redeem 2 (budget=3, already redeemed=1, remaining=2), not 3
-    count = _overflow_redeem(conn)
-    assert count == 2
-
-def test_overflow_no_budget_redeems_zero(conn):
-    """With no budget configured, overflow redeems nothing."""
-    _give(conn, "U2", "U1", "1.001", backdate_days=2)
-    _give(conn, "U1", "U3", "1.002")
-    count = _overflow_redeem(conn)
-    assert count == 0
-
-def test_overflow_fifo_order(conn):
-    """Overflow redeems oldest pending first."""
-    _set_budget(conn, points=1, rate=5.0)
-    # Two givers, each owed 1 point, created at different times
-    for g, r, ts_g, ts_r, days in [
-            ("U1", "U2", "1.001", "2.001", 10),
-            ("U3", "U4", "1.002", "2.002", 5)]:
-        conn.execute(
-            "INSERT INTO kudos (giver_id, recipient_id, channel_id, message_ts, created_at) "
-            "VALUES (%s, %s, 'C1', %s, NOW() - interval '%s days')", (g, r, ts_g, days))
-        conn.execute(
-            "INSERT INTO kudos (giver_id, recipient_id, channel_id, message_ts, created_at) "
-            "VALUES (%s, %s, 'C1', %s, NOW() - interval '%s days')", (r, g, ts_r, days))
-    # Overflow with budget=1: should redeem U1's (older) not U3's
-    count = _overflow_redeem(conn)
-    assert count == 1
-    redeemed = conn.execute(
-        "SELECT giver_id FROM kudos WHERE redeemed_at IS NOT NULL").fetchone()
-    assert redeemed[0] == "U1"
+        "SELECT redeemed_at IS NOT NULL FROM kudos WHERE message_ts = '1.002'").fetchone()[0]
+    assert redeemed is True
 
 
 # ============================================================
@@ -337,15 +256,11 @@ def test_weekly_reminder_ignores_deleted_kudos(conn):
 # ============================================================
 
 
-def test_inline_blocked_when_overflow_pending(conn):
-    _set_budget(conn, points=1, rate=5.0)
-    _give(conn, "U2", "U1", "1.001", backdate_days=3)
-    _give(conn, "U1", "U3", "1.002", backdate_days=2)  # fills budget
-    # U5 queued
-    _give(conn, "U4", "U5", "1.003", backdate_days=2)
-    r_queued = _give(conn, "U5", "U6", "1.004", backdate_days=1)
-    assert r_queued.redeemed is False
-    # U8 also queued — overflow pending from U5
-    _give(conn, "U7", "U8", "1.005", backdate_days=1)
-    r = _give(conn, "U8", "U9", "1.006")
-    assert r.redeemed is False
+def test_delete_kudos(conn):
+    _give(conn, "U1", "U2", "1.001")
+    row = conn.execute("SELECT * FROM delete_kudos('C1', '1.001')").fetchone()
+    assert row is not None
+    assert row[0] is False  # was_redeemed
+    deleted = conn.execute(
+        "SELECT deleted_at IS NOT NULL FROM kudos WHERE message_ts = '1.001'").fetchone()[0]
+    assert deleted is True

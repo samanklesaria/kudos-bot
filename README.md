@@ -10,7 +10,7 @@ A Slack peer-recognition system where employees publicly appreciate each other's
 
 **Reciprocity.** Points only convert to dollars when your given count matches your received count. You earn payouts by recognizing others, not just by being recognized.
 
-**Budget control.** Accounting sets a monthly point budget and conversion rate. Exhausted budgets queue payouts FIFO rather than rejecting them.
+**Budget control.** Accounting sets a monthly point budget and conversion rate. When the budget is exhausted, kudos are still recorded but marked as overflow — the payout opportunity is lost.
 
 **Measurable.** A dashboard uses interrupted time series analysis to estimate the causal effect of conversion-rate changes on activity.
 
@@ -22,7 +22,6 @@ All business logic lives in Postgres functions. The Python app is a thin event r
 app.py                  Slack event handlers (mentions, edits, deletes, channel joins)
 dash_app.py             Plotly Dash dashboard (usage, IRR, leaderboard, topics)
 cron/
-  overflow.py           Monthly: process queued redemptions against new budget
   weekly_reminder.py    Weekly: DM users who haven't given kudos
   backfill.py           Weekly: embed kudos messages, cluster, LLM-summarize topics
   record_users.py       Weekly: record covariates (num_users, workday_frac, channel_messages)
@@ -40,7 +39,7 @@ simulate.py             Synthetic data generator for demo/testing
 
 | Table | Purpose |
 |---|---|
-| `kudos` | Every kudos event (giver, recipient, message, embedding, timestamps) |
+| `kudos` | Every kudos event (giver, recipient, message, embedding, timestamps, overflow flags) |
 | `users` | Slack user ID → display name |
 | `budgets` | Monthly point budget and conversion rate |
 | `covariates` | Weekly time-varying covariates keyed by `(label, week)` — `num_users`, `workday_frac`, `channel_messages` |
@@ -51,7 +50,7 @@ simulate.py             Synthetic data generator for demo/testing
 
 | Event | Handler |
 |---|---|
-| `app_mention` | Give kudos: validate content (LLM), enforce limits, insert, attempt redemption |
+| `app_mention` | Give kudos: validate content (LLM), enforce limits, insert, attempt giver+recipient redemption |
 | `message_changed` | Re-evaluate edited kudos (delete old, re-give) |
 | `message_deleted` | Soft-delete kudos; warn accounting if already redeemed |
 | `member_joined_channel` | Onboarding message in public channels; leave private channels |
@@ -61,15 +60,15 @@ simulate.py             Synthetic data generator for demo/testing
 | Function | Purpose |
 |---|---|
 | `give_kudos()` | Validate limits, insert kudos, attempt auto-redemption |
-| `try_redeem()` | Budget lock, FIFO payout, budget-exhaustion detection |
-| `check_kudos_limits()` | Per-user advisory lock, daily cap, monthly per-pair cap |
+| `try_redeem()` | Giver+recipient redemption or overflow marking |
+| `check_kudos_limits()` | Daily + monthly per-pair cap |
 | `delete_kudos()` | Soft-delete with redeemed-point audit |
 
 ### Dashboard
 
 The Dash app (`dash_app.py`) provides:
 
-- **Operational snapshot** — current budget, spent this month, queued count
+- **Operational snapshot** — current budget, spent this month, overflow count
 - **Usage & budget** — weekly acquired/redeemed bars with budget line and Poisson forecast
 - **Treatment effect** — IRR plot from a Poisson GLM with successive difference contrasts, adjusted for time-varying covariates (`num_users`, `workday_frac`, `channel_messages`) when they vary
 - **Leaderboard** — points received per person
@@ -99,9 +98,8 @@ The Dash app (`dash_app.py`) provides:
 ### Running
 
 ```sh
-# Apply schema
-pg-schema-diff apply --from-dsn "$DATABASE_URL" --to-dir schema \
-  --allow-hazards HAS_UNTRACKABLE_DEPENDENCIES
+# Apply schema (drops and recreates all views/functions to avoid dependency issues)
+./scripts/migrate.sh
 
 # Start the bot
 uv run python app.py

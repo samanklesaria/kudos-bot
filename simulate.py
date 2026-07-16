@@ -10,7 +10,6 @@ import os
 
 import csv
 import patsy
-import statsmodels.api as sm
 import numpy as np
 import psycopg
 from dotenv import load_dotenv
@@ -27,16 +26,16 @@ N_MONTHS = 8
 BASE_TOPICS = 3
 
 def load_messages():
-    with open(os.path.join(os.path.dirname(__file__), "kudos_messages.csv")) as f:
+    with open(os.path.join(os.path.dirname(__file__), "kudos_specific_messages.csv")) as f:
         rows = list(csv.DictReader(f))
     texts = np.array([r["text"] for r in rows])
     targets = np.array([int(r["topic_ix"]) for r in rows])
     return texts, targets
 
-def make_budgets(now):
+def make_budgets(now, monthly_mu):
     return [
         {"month_date": now - relativedelta(months=N_MONTHS - 1 - month),
-        "point_budget": 5 + month * 3,
+        "point_budget": int(monthly_mu[month]) // 10 * 10,
         "conversion_rate": max(1, month * 10)}
         for month in range(N_MONTHS)]
 
@@ -57,29 +56,24 @@ def build_topic_weights(rng):
     return w_MT
 
 def simulate_covariates(rng):
-    """Simulate weekly covariates: num_users, workday_frac, channel_messages."""
+    """Simulate weekly covariates: num_users, workday_frac."""
     W = N_MONTHS * 4
     num_users = 20 + np.cumsum(rng.integers(2, 6, size=N_MONTHS))
     num_users_W = np.repeat(num_users, 4) + rng.integers(-2, 3, size=W)
     # Most weeks are full; ~15% have a holiday
     workday_frac_W = np.where(rng.random(W) < 0.85, 1.0, rng.choice([0.6, 0.8], size=W))
-    # Channel messages scale with users, plus noise
-    channel_messages_W = (num_users_W * rng.uniform(8, 15, size=W)).astype(int)
-    return {"num_users": num_users_W, "workday_frac": workday_frac_W,
-        "channel_messages": channel_messages_W}
+    return {"num_users": num_users_W, "workday_frac": workday_frac_W}
 
 def simulate_ITS_counts(rng, covariates):
-    "Simulate weekly counts from a Poisson ITS with covariates"
+    "Simulate weekly counts from a Poisson ITS with covariates, capped around 20/week"
     months = np.arange(N_MONTHS)
-    beta = np.full(N_MONTHS, 0.7)
-    beta[1:] = 0.25 / months[1:] ** 2
+    beta = np.full(N_MONTHS, -1.0)
+    beta[1:] = 0.1 / months[1:] ** 2
     data = {'t': np.repeat(months, 4)}
     X = np.asarray(patsy.dmatrix("C(t, Diff)", data))
-    cov_effect = (0.02 * covariates["num_users"]
-        + 0.001 * np.log(covariates["channel_messages"]))
-    mu = covariates["workday_frac"] * np.exp(X @ beta + cov_effect)
-    dist = sm.families.Poisson().get_distribution(mu)
-    return dist.rvs(random_state=rng).reshape((N_MONTHS, 4))
+    mu = covariates["workday_frac"] * covariates["num_users"] * np.exp(X @ beta)
+    mu_M4 = mu.reshape((N_MONTHS, 4))
+    return rng.poisson(mu).reshape((N_MONTHS, 4)), mu_M4
 
 def clear_db(conn):
     conn.execute("DELETE FROM cluster_members")
@@ -145,10 +139,10 @@ def main(seed=42):
     rng = np.random.default_rng(seed)
     texts, targets = load_messages()
     now = date.today().replace(day=1)
-    budgets = make_budgets(now)
     covariates = simulate_covariates(rng)
     weights_MT = build_topic_weights(rng)
-    counts_M4 = simulate_ITS_counts(rng, covariates)
+    counts_M4, mu_M4 = simulate_ITS_counts(rng, covariates)
+    budgets = make_budgets(now, mu_M4.sum(axis=1))
     texts_S, weeks_S = choose_texts(counts_M4, texts, targets, weights_MT, rng)
     with open(USERNAMES_FILE) as f:
         users = [line.strip() for line in f if line.strip()]

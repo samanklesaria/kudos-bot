@@ -3,17 +3,14 @@
 Panels:
   1. Operational snapshot (budget, spent, queued)
   2. Weekly acquired vs redeemed with budget line + forecast
-  3. Dose-response IRR plot (Negative Binomial GLM on conversion_rate)
+  3. Dose-response IRR plot (Poisson GLM on conversion_rate)
   4. Recipient point distribution
   5. Topic cluster streamgraph with drill-down table
 """
 import os, json
-import numpy as np
 import pandas as pd
 import psycopg
 import plotly.graph_objects as go
-import statsmodels.formula.api as smf
-import statsmodels.api as sm
 from scipy import stats
 from dash import Dash, html, dcc, callback, Input, Output, State
 import dash_ag_grid as dag
@@ -40,14 +37,16 @@ def scalar(sql):
 
 def load_snapshot():
     budget = scalar(
-        "SELECT point_budget FROM budgets WHERE month_date <= CURRENT_DATE "
-        "ORDER BY month_date DESC LIMIT 1")
+        "SELECT point_budget FROM effective_budget")
     spent = scalar(
         "SELECT COUNT(*)::int FROM kudos "
         "WHERE redeemed_at IS NOT NULL AND deleted_at IS NULL "
         "AND redeemed_at >= date_trunc('month', NOW())")
-    queued = scalar("SELECT COUNT(*)::int FROM pending_redemptions")
-    return budget or 0, spent, queued
+    overflow = scalar(
+        "SELECT COUNT(*)::int FROM kudos "
+        "WHERE (giver_overflow OR recipient_overflow) AND deleted_at IS NULL "
+        "AND created_at >= date_trunc('month', NOW())")
+    return budget or 0, spent, overflow
 
 def load_weekly():
     return query("SELECT * FROM weekly_kudos")
@@ -78,44 +77,34 @@ def load_user_messages(display_name):
 def load_covariates():
     return query("SELECT * FROM covariates ORDER BY label, week")
 
-def fit_its(df):
-    """Fit Poisson GLM: redeemed ~ C(conversion_rate, Diff) [+ covariates]. Return IRR df + forecast."""
-    model_df = pd.DataFrame({"y": df["redeemed"].astype(float),
-        "t": df["conversion_rate"].astype(float),
-        "yw": df["yw"]})
+def _exposure_by_week(df):
+    """Compute per-week exposure (workday_frac * num_users) from covariates, keyed by yw."""
     covs = load_covariates()
-    cov_names = []
-    exposure = None
-    if not covs.empty:
-        for label, grp in covs.groupby("label"):
-            if grp["value"].nunique() <= 1:
-                continue
-            cov_map = dict(zip(grp["week"], grp["value"].astype(float)))
-            model_df[label] = model_df["yw"].map(cov_map)
-            if model_df[label].isna().any():
-                model_df = model_df.drop(columns=[label])
-            elif label == "workday_frac":
-                exposure = model_df.pop(label)
-            else:
-                if label == "channel_messages":
-                    model_df[label] = np.log(model_df[label])
-                cov_names.append(label)
-    formula = "y ~ C(t, Diff)" + "".join(f" + {c}" for c in cov_names)
-    model_df = model_df.rename(columns={"yw": "group"})
-    fit = smf.gee(formula, groups="group", data=model_df,
-        family=sm.families.Poisson(),
-        cov_struct=sm.cov_struct.Exchangeable(),
-        exposure=exposure).fit()
-    # IRR table from difference-coded coefficients (robust sandwich SEs)
-    unique_rates = sorted(model_df["t"].unique())
-    n_diff = len(unique_rates) - 1
-    betas, ses = fit.params.iloc[1:1 + n_diff], fit.bse.iloc[1:1 + n_diff]
-    irr_df = pd.DataFrame([dict(rate=r, irr=np.exp(b),
-        lo=np.exp(b - 1.96 * se), hi=np.exp(b + 1.96 * se))
-        for r, b, se in zip(unique_rates[1:], betas, ses)])
-    # Forecast next week at latest conversion rate
-    cov_contrib = sum(fit.params[c] * model_df[c].iloc[-1] for c in cov_names)
-    mu = np.exp(fit.params.iloc[0] + betas.sum() + cov_contrib)
+    pivoted = covs.pivot(index="week", columns="label", values="value")
+    exposure = (pivoted["workday_frac"] * pivoted["num_users"]).astype(float)
+    return df["yw"].map(exposure)
+
+def fit_its(df):
+    """Pairwise IRR + CI for consecutive conversion rates via Poisson 2-sample comparison."""
+    from statsmodels.stats.rates import confint_poisson_2indep
+    df = df.copy()
+    df["exposure"] = _exposure_by_week(df)
+    rate_month = df.groupby("conversion_rate")["ym"].first()
+    agg = df.groupby("conversion_rate").agg(
+        count=("redeemed", "sum"), exposure=("exposure", "sum")).sort_index()
+    if len(agg) < 2:
+        return pd.DataFrame(), None
+    rows = []
+    for (r1, a), (r2, b) in zip(agg.iloc[:-1].iterrows(), agg.iloc[1:].iterrows()):
+        lo, hi = confint_poisson_2indep(b["count"], b["exposure"], a["count"], a["exposure"],
+            compare="ratio", method="score", alpha=0.1)
+        irr = (b["count"] / b["exposure"]) / (a["count"] / a["exposure"])
+        rows.append(dict(month=rate_month[r2], rate=r2, irr=irr, lo=lo, hi=hi))
+    irr_df = pd.DataFrame(rows)
+    # Forecast next week — scale rate by last week's exposure to get counts
+    last = agg.iloc[-1]
+    last_exposure = df["exposure"].iloc[-1]
+    mu = last["count"] / last["exposure"] * last_exposure
     lo = stats.poisson.ppf(0.025, mu)
     hi = stats.poisson.ppf(0.975, mu)
     return irr_df, dict(median=mu, lo=lo, hi=hi)
@@ -126,27 +115,33 @@ load_figure_template("flatly")
 
 app = Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
 server = app.server
+_scroll = {"overflowY": "auto", "height": "calc(100vh - 120px)"}
+_grid_opts = {"pagination": True, "paginationPageSize": 20,
+    "rowStyle": {"paddingTop": "2px", "paddingBottom": "2px"}}
+_col_defs = {"resizable": True, "sortable": True,
+    "wrapText": True, "autoHeight": True, "cellStyle": {"lineHeight": "1.4"}}
+
 app.layout = dbc.Container([
-    dbc.Row(dbc.Col(html.H1("Kudos Dashboard", className="my-3"))),
+    html.H1("Kudos Dashboard", className="my-2"),
     dcc.Tabs([
         dcc.Tab(label="Usage & Budget", children=[
-            dbc.Row(id="snapshot", className="g-3 my-3"),
-            dcc.Graph(id="usage-plot", style={"height": "450px"}),
-            dcc.Graph(id="irr-plot", style={"height": "400px"})]),
+            html.Div(style=_scroll, children=[
+                dbc.Row(id="snapshot", className="g-2 my-2"),
+                dcc.Graph(id="usage-plot", style={"height": "38vh"}),
+                dcc.Graph(id="irr-plot", style={"height": "30vh"})])]),
         dcc.Tab(label="Leaderboard", children=[
-            dcc.Graph(id="leaderboard-plot"),
-            html.Div(id="leaderboard-label", className="my-2 fw-bold"),
-            dag.AgGrid(id="leaderboard-table", defaultColDef={"resizable": True, "sortable": True,
-                "wrapText": True, "autoHeight": True, "cellStyle": {"lineHeight": "1.4"}},
-                dashGridOptions={"pagination": True, "paginationPageSize": 20,
-                    "rowStyle": {"paddingTop": "2px", "paddingBottom": "2px"}})]),
+            html.Div(dcc.Graph(id="leaderboard-plot"),
+                style={"overflowY": "auto", "height": "calc(50vh - 60px)"}),
+            html.Div(id="leaderboard-label", className="my-1 fw-bold"),
+            html.Div(dag.AgGrid(id="leaderboard-table", defaultColDef=_col_defs,
+                dashGridOptions=_grid_opts),
+                style={"overflowY": "auto", "height": "calc(50vh - 60px)"})]),
         dcc.Tab(label="Topics", children=[
-            dcc.Graph(id="stream-plot"),
-            html.Div(id="topic-label", className="my-2 fw-bold"),
-            dag.AgGrid(id="topic-table", defaultColDef={"resizable": True, "sortable": True,
-                "wrapText": True, "autoHeight": True, "cellStyle": {"lineHeight": "1.4"}},
-                dashGridOptions={"pagination": True, "paginationPageSize": 20,
-                    "rowStyle": {"paddingTop": "2px", "paddingBottom": "2px"}})])]),
+            html.Div(style=_scroll, children=[
+                dcc.Graph(id="stream-plot", style={"height": "40vh"}),
+                html.Div(id="topic-label", className="my-1 fw-bold"),
+                dag.AgGrid(id="topic-table", defaultColDef=_col_defs,
+                    dashGridOptions=_grid_opts)])])]),
     dcc.Store(id="stream-data"),
     dcc.Store(id="enriched-click")], fluid=True)
 
@@ -174,11 +169,11 @@ app.clientside_callback(
     Output("irr-plot", "figure"),
     Input("snapshot", "id"))
 def update_usage(_):
-    budget, spent, queued = load_snapshot()
+    budget, spent, overflow = load_snapshot()
     snap = [dbc.Col(dbc.Card(dbc.CardBody([
         html.H6(label, className="card-subtitle text-muted"),
         html.H3(f"{val} pts")]), className="shadow-sm"), md=4)
-        for label, val in [("Monthly Budget", budget), ("Spent This Month", spent), ("Queued", queued)]]
+        for label, val in [("Monthly Budget", budget), ("Spent This Month", spent), ("Overflowed This Month", overflow)]]
 
     df = load_weekly()
     if df.empty:
@@ -194,7 +189,9 @@ def update_usage(_):
         marker_color="#50B86C"))
     fig.add_trace(go.Bar(x=df["x"], y=df["redeemed"], name="Redeemed",
         marker_color="#4A90D9"))
-    fig.add_trace(go.Scatter(x=df["x"] - 0.5, y=weekly_budget, name="Budget/4",
+    budget_x = pd.concat([df["x"] - 0.5, pd.Series([df["x"].max() + 0.5])])
+    budget_y = pd.concat([weekly_budget, pd.Series([weekly_budget.iloc[-1]])])
+    fig.add_trace(go.Scatter(x=budget_x, y=budget_y, name="Budget/4",
         mode="lines", line=dict(dash="dot", color="red")))
 
     # Month labels on x-axis + dollar budget annotations
@@ -202,15 +199,19 @@ def update_usage(_):
     month_budgets = df.groupby("ym").first()
     dollar_annotations = [dict(
         x=month_ticks[ym] - 0.5, y=float(month_budgets.loc[ym, "point_budget"]) / 4,
-        text=f"${int(month_budgets.loc[ym, 'point_budget'] * month_budgets.loc[ym, 'conversion_rate'])}",
+        text=f"${int(month_budgets.loc[ym, 'point_budget'] * month_budgets.loc[ym, 'conversion_rate'])} (${month_budgets.loc[ym, 'conversion_rate']:.0f}/pt)",
         showarrow=False, yshift=10, font=dict(color="red", size=10))
         for ym in month_ticks.index]
+    month_lines = [dict(type="line", x0=x - 0.5, x1=x - 0.5, y0=0, y1=1, yref="paper",
+        line=dict(dash="dot", color="grey", width=1)) for x in month_ticks.values[1:]]
     fig.update_layout(
         barmode="group", title="Weekly Kudos Acquired & Redeemed",
-        annotations=dollar_annotations,
+        annotations=dollar_annotations, shapes=month_lines,
+        margin=dict(t=30, b=30),
         xaxis=dict(tickvals=month_ticks.values, ticktext=[
             pd.Timestamp(m + "-01").strftime("%b %Y") for m in month_ticks.index]),
-        yaxis_title="Points", legend=dict(orientation="h", y=1.12))
+        yaxis_title="Points", legend=dict(orientation="h", y=1, yanchor="top",
+            bgcolor="rgba(255,255,255,0.7)"))
 
     # Forecast
     try:
@@ -229,13 +230,16 @@ def update_usage(_):
     irr_fig = go.Figure()
     if not irr_df.empty:
         irr_fig.add_trace(go.Scatter(
-            x=irr_df["rate"], y=irr_df["irr"], mode="markers+lines",
+            x=irr_df["month"], y=irr_df["irr"], mode="markers+lines",
             marker=dict(size=8, color="#50B86C"),
+            text=[f"${r:.0f}/pt" for r in irr_df["rate"]],
+            textposition="top center",
             error_y=dict(type="data", symmetric=False,
                 array=(irr_df["hi"] - irr_df["irr"]).tolist(),
                 arrayminus=(irr_df["irr"] - irr_df["lo"]).tolist())))
-        irr_fig.update_layout(title="Dose-Response: Conversion Rate vs Activity (IRR)",
-            xaxis_title="Conversion rate ($/pt)", yaxis_title="Incidence Rate Ratio")
+        irr_fig.update_layout(title="IRR vs Previous Rate Over Time",
+            margin=dict(t=40, b=30),
+            xaxis_title="Month", yaxis_title="Incidence Rate Ratio")
 
     return snap, fig, irr_fig
 
@@ -323,4 +327,4 @@ def drill_topic(click, store):
     return f"Topic: {summary} ({month})", cols, msgs.to_dict("records")
 
 if __name__ == "__main__":
-    app.run(debug=os.environ.get("DASH_DEBUG"))
+    app.run(os.environ.get("DASH_DEBUG"))
