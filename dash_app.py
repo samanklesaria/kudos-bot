@@ -10,6 +10,7 @@ Panels:
 import os, json
 import pandas as pd
 import psycopg
+from psycopg_pool import ConnectionPool
 import plotly.graph_objects as go
 from scipy import stats
 from dash import Dash, html, dcc, callback, Input, Output, State
@@ -21,15 +22,17 @@ from pgvector.psycopg import register_vector
 
 load_dotenv()
 DATABASE_URL = os.environ["DATABASE_URL"]
+pool = ConnectionPool(DATABASE_URL)
 
 def query(sql, params=None):
-    with psycopg.connect(DATABASE_URL, row_factory=psycopg.rows.dict_row) as conn:
+    with pool.connection() as conn:
+        conn.row_factory = psycopg.rows.dict_row
         register_vector(conn)
         rows = conn.execute(sql, params).fetchall()
         return pd.DataFrame(rows) if rows else pd.DataFrame()
 
 def scalar(sql):
-    with psycopg.connect(DATABASE_URL) as conn:
+    with pool.connection() as conn:
         row = conn.execute(sql).fetchone()
         return row[0] if row else None
 
@@ -37,7 +40,7 @@ def scalar(sql):
 
 def load_snapshot():
     budget = scalar(
-        "SELECT point_budget FROM effective_budget")
+        "SELECT point_budget FROM effective_budget()")
     spent = scalar(
         "SELECT COUNT(*)::int FROM kudos "
         "WHERE redeemed_at IS NOT NULL AND deleted_at IS NULL "

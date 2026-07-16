@@ -21,6 +21,7 @@ dependencies = [
     "dash-ag-grid>=35.2.0",
     "pandas>=3.0.3",
     "gunicorn>=26.0.0",
+    "holidays>=0.100",
 ]
 
 [tool.pytest.ini_options]

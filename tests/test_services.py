@@ -256,6 +256,47 @@ def test_weekly_reminder_ignores_deleted_kudos(conn):
 # ============================================================
 
 
+# ============================================================
+# §3.6 — Edit flow: delete old, re-give
+# ============================================================
+
+
+def test_edit_from_vague_to_specific(conn):
+    """Deleting a vague kudos and re-giving with specific text should succeed."""
+    _set_budget(conn, points=100, rate=5.0)
+    r1 = _give(conn, "U1", "U2", "1.001", text="good job")
+    assert r1.success is True  # DB doesn't enforce content; LLM gate is in app.py
+    # Simulate edit: delete old, re-give with new text
+    conn.execute("SELECT * FROM delete_kudos('C1', '1.001')")
+    deleted = conn.execute(
+        "SELECT deleted_at IS NOT NULL FROM kudos WHERE message_ts = '1.001'").fetchone()[0]
+    assert deleted is True
+    r2 = _give(conn, "U1", "U2", "1.002", text="great job leading the incident retro")
+    assert r2.success is True
+
+
+# ============================================================
+# §3.7 — Redemption scoping
+# ============================================================
+
+
+def test_global_redemption_clears_owed_eagerly(conn):
+    """try_redeem redeems all owed users globally, so no stale backlog accumulates."""
+    _set_budget(conn, points=100, rate=5.0)
+    # U4→U3, then U3→U5: after U3's give, U3 is owed and redeemed immediately
+    _give(conn, "U4", "U3", "1.001", backdate_days=3)
+    r = _give(conn, "U3", "U5", "1.002", backdate_days=2)
+    assert "U3" in r.redeemed_ids
+    # U1→U2: U3 is already redeemed, so only U1/U2 matter
+    r2 = _give(conn, "U1", "U2", "1.003")
+    assert "U3" not in r2.redeemed_ids
+
+
+# ============================================================
+# §3.5 — Delete / undo
+# ============================================================
+
+
 def test_delete_kudos(conn):
     _give(conn, "U1", "U2", "1.001")
     row = conn.execute("SELECT * FROM delete_kudos('C1', '1.001')").fetchone()

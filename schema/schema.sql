@@ -17,8 +17,8 @@ CREATE TABLE kudos (
 );
 
 CREATE TABLE users (
-    id TEXT PRIMARY KEY,
-    display_name TEXT NOT NULL
+    id VARCHAR(21) PRIMARY KEY,
+    display_name VARCHAR(64) NOT NULL
 );
 
 CREATE TABLE budgets (

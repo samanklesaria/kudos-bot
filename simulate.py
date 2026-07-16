@@ -13,7 +13,7 @@ import patsy
 import numpy as np
 import psycopg
 from dotenv import load_dotenv
-from datetime import date, timedelta
+from datetime import date
 from dateutil.relativedelta import relativedelta
 from sizecheck import sizecheck
 
@@ -83,7 +83,7 @@ def clear_db(conn):
     conn.execute("DELETE FROM covariates")
     conn.execute("DELETE FROM users")
 
-def write_db(users, budgets, records, rng, covariates, now):
+def write_db(users, budgets, records, covariates, now):
     with psycopg.connect(DATABASE_URL) as conn:
         clear_db(conn)
         for display_name in users:
@@ -101,14 +101,14 @@ def write_db(users, budgets, records, rng, covariates, now):
                 conn.execute(
                     "INSERT INTO covariates (label, week, value) VALUES (%s, %s, %s)",
                     (label, week_str, float(val)))
-        for i, (giver, recipient, text, kudos_at) in enumerate(records):
-            should_redeem = rng.random() < 0.7
-            redeemed_at = kudos_at + timedelta(hours=float(rng.exponential(48))) if should_redeem else None
+        # Insert kudos in chronological order, redeeming after each one
+        for i, (giver, recipient, text, kudos_at) in sorted(enumerate(records), key=lambda r: r[1][3]):
             conn.execute(
                 "INSERT INTO kudos (giver_id, recipient_id, channel_id, message_ts, message_text, "
-                "created_at, redeemed_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                (giver, recipient, "sim", f"{i}", text, kudos_at, redeemed_at))
+                "created_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (giver, recipient, "sim", f"{i}", text, kudos_at))
+            conn.execute("SELECT * FROM try_redeem(%s)", (kudos_at,))
 
 @sizecheck
 def choose_texts(counts_M4, texts_N, topics_N, weights_MT, rng):
@@ -147,7 +147,7 @@ def main(seed=42):
     with open(USERNAMES_FILE) as f:
         users = [line.strip() for line in f if line.strip()]
     records = list(events(now, users, texts_S, weeks_S, rng))
-    write_db(users, budgets, records, rng, covariates, now)
+    write_db(users, budgets, records, covariates, now)
     backfill()
 
 if __name__ == "__main__":

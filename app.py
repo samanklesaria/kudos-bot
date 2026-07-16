@@ -29,14 +29,16 @@ def is_concrete_praise(text):
             json={
                 "messages": [
                     {"role": "system", "content": (
-                        "You are a content classifier. The user will provide a workplace "
+                        "You are a content classifier. The user will provide a "
                         "kudos message. Does it praise someone for a specific, concrete, "
-                        "demonstrable action they took? Reply with only YES or NO.")},
+                        "action they took? Reply with only YES or NO.")},
                     {"role": "user", "content": text}],
                 "max_tokens": 5}).json()
-        return response["choices"][0]["message"]["content"].strip().upper().startswith("YES")
+        check = response["choices"][0]["message"]["content"].strip().upper()
+        return check.startswith("YES")
     except Exception:
-        return True  # assume good faith if LLM is down
+        logger.warning("LLM content gate failed, assuming good faith")
+        return True
 
 
 def _try_give_kudos(giver_id, recipient_id, channel_id, message_ts, text):
@@ -44,7 +46,7 @@ def _try_give_kudos(giver_id, recipient_id, channel_id, message_ts, text):
         app.client.chat_postMessage(
             channel=channel_id,
             text="Your kudos needs to mention a specific action. Please edit your message to be more specific. "
-                 "Example: `@kudos-bot @someone Great job leading the incident retro today!`",
+                 "Example: `@kudos @someone Great job leading the incident retro today!`",
             thread_ts=message_ts)
         return
     giver_info = app.client.users_info(user=giver_id)
@@ -70,61 +72,57 @@ def _try_give_kudos(giver_id, recipient_id, channel_id, message_ts, text):
     if redeemed_ids:
         redeemed_str = " and ".join(f"<@{uid}>" for uid in redeemed_ids)
         msg += f" ({redeemed_str} auto-redeemed 1 point — ${rate:.2f})"
-    unredeemed_ids = [uid for uid in (giver_id, recipient_id) if uid not in redeemed_ids]
-    if unredeemed_ids:
-        unredeemed_str = " and ".join(f"<@{uid}>" for uid in unredeemed_ids)
-        msg += f" ({unredeemed_str}'s point can't be redeemed — over budget this month.)"
     app.client.chat_postMessage(channel=channel_id, text=msg, thread_ts=message_ts)
     if notify_budget and ACCOUNTING_CHANNEL:
         app.client.chat_postMessage(
             channel=ACCOUNTING_CHANNEL,
-            text=f"Budget alert: This month's kudos budget has been exhausted. ")
+            text="Budget alert: This month's kudos budget has been exhausted.")
+
+def _parse_kudos(text, bot_user_id):
+    """Extract the single recipient from a kudos message, or return an error string."""
+    recipients = [uid for uid in USER_MENTION_RE.findall(text) if uid != bot_user_id]
+    if not recipients:
+        return None, "Tag someone to give them kudos! Example: `@kudos-bot @someone Great presentation on sandwich-making today!`"
+    if len(recipients) > 1:
+        return None, "Please give kudos to one person at a time."
+    return recipients[0], None
+
+def _handle_kudos(giver_id, channel_id, message_ts, text, bot_user_id, *, delete_first=False):
+    recipient, error = _parse_kudos(text, bot_user_id)
+    if error:
+        if not delete_first:
+            app.client.chat_postMessage(channel=channel_id, text=error, thread_ts=message_ts)
+        return
+    if delete_first:
+        with pool.connection() as conn:
+            row = _delete_kudos(conn, channel_id, message_ts)
+        _notify_redeemed_deletion(row)
+    _try_give_kudos(giver_id, recipient, channel_id, message_ts, text)
 
 @app.event("app_mention")
 def handle_mention(event, context):
-    giver_id = event["user"]
-    message_ts = event["ts"]
-    text = event.get("text", "")
-    bot_user_id = context["bot_user_id"]
-    recipients = [uid for uid in USER_MENTION_RE.findall(text) if uid != bot_user_id]
-    if not recipients:
-        app.client.chat_postMessage(
-            channel=event["channel"],
-            text="Tag someone to give them kudos! Example: `@kudos-bot @someone Great presentation on sandwich-making today!`",
-            thread_ts=message_ts)
+    if "edited" in event or event.get("subtype") == "message_changed":
         return
-    if len(recipients) > 1:
-        app.client.chat_postMessage(
-            channel=event["channel"],
-            text="Please give kudos to one person at a time.",
-            thread_ts=message_ts)
-        return
-    _try_give_kudos(giver_id, recipients[0], event["channel"], message_ts, text)
+    _handle_kudos(event["user"], event["channel"], event["ts"],
+        event.get("text", ""), context.bot_user_id)
 
 @app.event({"type": "message", "subtype": "message_changed"})
 def handle_message_changed(event, context):
     message = event.get("message", {})
     text = message.get("text", "")
-    bot_user_id = context["bot_user_id"]
-    if f"<@{bot_user_id}>" not in text:
+    if text == event.get("previous_message", {}).get("text", ""):
+        return
+    if f"<@{context.bot_user_id}>" not in text:
         return
     giver_id = message.get("user")
     if not giver_id:
         return
-    message_ts = message.get("ts")
-    channel_id = event["channel"]
-    recipients = [uid for uid in USER_MENTION_RE.findall(text) if uid != bot_user_id]
-    if len(recipients) != 1:
-        return
-    with pool.connection() as conn:
-        row = _delete_kudos(conn, channel_id, message_ts)
-    _notify_redeemed_deletion(row)
-    _try_give_kudos(giver_id, recipients[0], channel_id, message_ts, text)
+    _handle_kudos(giver_id, event["channel"], message.get("ts"),
+        text, context.bot_user_id, delete_first=True)
 
 def _delete_kudos(conn, channel_id, message_ts):
-    row = conn.execute(
+    return conn.execute(
         "SELECT * FROM delete_kudos(%s, %s)", (channel_id, message_ts)).fetchone()
-    return row
 
 def _notify_redeemed_deletion(row):
     if row and row[0] and ACCOUNTING_CHANNEL:
@@ -145,7 +143,7 @@ def handle_message_deleted(event):
 
 @app.event("member_joined_channel")
 def handle_member_joined(event, context):
-    if event.get("user") != context["bot_user_id"]:
+    if event.get("user") != context.bot_user_id:
         return
     channel_id = event["channel"]
     info = app.client.conversations_info(channel=channel_id)

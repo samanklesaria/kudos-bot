@@ -1,7 +1,7 @@
 """Cron script: record weekly covariates (num_users, workday_frac)."""
 import os
-import time
 from datetime import date, timedelta
+import holidays
 import psycopg
 from dotenv import load_dotenv
 from slack_sdk import WebClient
@@ -24,10 +24,12 @@ for ch in channels:
         if not cursor:
             break
 
-# ── workday_frac: business days in current ISO week / 5 ──────────────
+# ── workday_frac: non-holiday weekdays in current ISO week / 5 ───────
 today = date.today()
 monday = today - timedelta(days=today.weekday())
-workdays = sum(1 for d in range(5) if (monday + timedelta(days=d)).isoweekday() <= 5)
+us_holidays = holidays.US(years=today.year)
+workdays = sum(1 for d in range(5)
+    if (day := monday + timedelta(days=d)) not in us_holidays)
 workday_frac = workdays / 5.0
 
 
