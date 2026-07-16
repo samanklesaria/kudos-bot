@@ -101,23 +101,21 @@ def fit_its(df):
                     model_df[label] = np.log(model_df[label])
                 cov_names.append(label)
     formula = "y ~ C(t, Diff)" + "".join(f" + {c}" for c in cov_names)
-    model_df = model_df.drop(columns=["yw"])
-    fit = smf.glm(formula, data=model_df,
+    model_df = model_df.rename(columns={"yw": "group"})
+    fit = smf.gee(formula, groups="group", data=model_df,
         family=sm.families.Poisson(),
+        cov_struct=sm.cov_struct.Exchangeable(),
         exposure=exposure).fit()
-    # IRR table: skip intercept and covariates, exponentiate difference coefficients only
+    # IRR table from difference-coded coefficients (robust sandwich SEs)
     unique_rates = sorted(model_df["t"].unique())
     n_diff = len(unique_rates) - 1
-    betas, ses = fit.params[1:1 + n_diff], fit.bse[1:1 + n_diff]
-    irr_rows = [dict(rate=r, irr=np.exp(b), lo=np.exp(b - 1.96 * se), hi=np.exp(b + 1.96 * se))
-        for r, b, se in zip(unique_rates[1:], betas, ses)]
-    irr_df = pd.DataFrame(irr_rows)
-    # Forecast next week at latest conversion rate (prediction interval)
-    pred_data = pd.DataFrame({"t": [unique_rates[-1]]})
-    for c in cov_names:
-        pred_data[c] = [model_df[c].iloc[-1]]
-    pred = fit.get_prediction(pred_data)
-    mu = pred.predicted[0]
+    betas, ses = fit.params.iloc[1:1 + n_diff], fit.bse.iloc[1:1 + n_diff]
+    irr_df = pd.DataFrame([dict(rate=r, irr=np.exp(b),
+        lo=np.exp(b - 1.96 * se), hi=np.exp(b + 1.96 * se))
+        for r, b, se in zip(unique_rates[1:], betas, ses)])
+    # Forecast next week at latest conversion rate
+    cov_contrib = sum(fit.params[c] * model_df[c].iloc[-1] for c in cov_names)
+    mu = np.exp(fit.params.iloc[0] + betas.sum() + cov_contrib)
     lo = stats.poisson.ppf(0.025, mu)
     hi = stats.poisson.ppf(0.975, mu)
     return irr_df, dict(median=mu, lo=lo, hi=hi)

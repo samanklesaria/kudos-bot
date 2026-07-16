@@ -76,7 +76,7 @@ def backfill_clusters(conn):
     # Warm-start from previous centers if available
     prev_centers = conn.execute("SELECT center FROM clusters ORDER BY id").fetchall()
     prev_centers = np.array([r[0] for r in prev_centers]) if prev_centers else None
-    k = min(n_months + 3, len(rows) - 1)
+    k = min(int(n_months + 0.75 + 3), len(rows) - 1)
     print(f"Clustering {len(rows)} kudos (k={k})...")
 
     if prev_centers is not None and len(prev_centers) <= k:

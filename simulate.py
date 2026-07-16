@@ -35,8 +35,8 @@ def load_messages():
 
 def make_budgets(now):
     return [
-        {"month_date": now - relativedelta(months=N_MONTHS + 1 - month),
-        "point_budget": int(100 * 2 ** (month / 2)),
+        {"month_date": now - relativedelta(months=N_MONTHS - 1 - month),
+        "point_budget": 5 + month * 3,
         "conversion_rate": max(1, month * 10)}
         for month in range(N_MONTHS)]
 
@@ -71,8 +71,8 @@ def simulate_covariates(rng):
 def simulate_ITS_counts(rng, covariates):
     "Simulate weekly counts from a Poisson ITS with covariates"
     months = np.arange(N_MONTHS)
-    beta = np.full(N_MONTHS, 0.5)
-    beta[1:] = 0.15 / months[1:] ** 0.5
+    beta = np.full(N_MONTHS, 0.7)
+    beta[1:] = 0.25 / months[1:] ** 2
     data = {'t': np.repeat(months, 4)}
     X = np.asarray(patsy.dmatrix("C(t, Diff)", data))
     cov_effect = (0.02 * covariates["num_users"]
