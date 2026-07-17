@@ -270,3 +270,28 @@ def test_delete_unredeems(conn):
     redeemed = conn.execute(
         "SELECT redeemed_at IS NOT NULL FROM kudos WHERE message_ts = '1.001'").fetchone()[0]
     assert redeemed is False
+
+def test_delete_re_redeems_eligible(conn):
+    """After delete un-redeems, try_redeem should re-redeem if budget allows."""
+    _set_budget(conn, points=100, rate=5.0)
+    _give(conn, "U2", "U1", "1.001", backdate_days=3)
+    _give(conn, "U3", "U1", "1.002", backdate_days=2)
+    _give(conn, "U1", "U4", "1.003", backdate_days=1)  # redeems 1.001
+    # Delete 1.003 → un-redeems 1.001, then try_redeem runs
+    conn.execute("CALL delete_kudos('C1', '1.003')")
+    # U1 still has received=2, given=0 after delete, so not owed — no re-redemption
+    redeemed = conn.execute(
+        "SELECT redeemed_at IS NOT NULL FROM kudos WHERE message_ts = '1.001'").fetchone()[0]
+    assert redeemed is False
+    # Give again → U1 owed again, should re-redeem
+    r = _give(conn, "U1", "U5", "1.004")
+    assert r.redeemed is True
+
+def test_redeems_column_set(conn):
+    """The redeems FK should point from the giving kudos to the redeemed received kudos."""
+    _set_budget(conn, points=100, rate=5.0)
+    _give(conn, "U2", "U1", "1.001", backdate_days=2)
+    _give(conn, "U1", "U3", "1.002")  # should set redeems on 1.002 → 1.001's id
+    redeemed_id = conn.execute("SELECT id FROM kudos WHERE message_ts = '1.001'").fetchone()[0]
+    redeemer = conn.execute("SELECT redeems FROM kudos WHERE message_ts = '1.002'").fetchone()[0]
+    assert redeemer == redeemed_id

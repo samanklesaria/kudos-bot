@@ -23,7 +23,7 @@ USER_MENTION_RE = re.compile(r"<@(U[A-Z0-9]+)>")
 def is_concrete_praise(text):
     try:
         response = requests.post(
-            f"{os.environ["CHAT_URI"]}/v1/chat/completions",
+            f"{os.environ['CHAT_URI']}/v1/chat/completions",
             timeout=10,
             json={
                 "messages": [

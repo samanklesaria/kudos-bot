@@ -99,6 +99,8 @@ def fit_its(df):
         return pd.DataFrame(), None
     rows = []
     for (r1, a), (r2, b) in zip(agg.iloc[:-1].iterrows(), agg.iloc[1:].iterrows()):
+        if a["exposure"] == 0 or b["exposure"] == 0:
+            continue
         lo, hi = confint_poisson_2indep(b["count"], b["exposure"], a["count"], a["exposure"],
             compare="ratio", method="score", alpha=0.1)
         irr = (b["count"] / b["exposure"]) / (a["count"] / a["exposure"])
@@ -123,6 +125,8 @@ _grid_opts = {"pagination": True, "paginationPageSize": 20,
     "rowStyle": {"paddingTop": "2px", "paddingBottom": "2px"}}
 _col_defs = {"resizable": True, "sortable": True,
     "wrapText": True, "autoHeight": True, "cellStyle": {"lineHeight": "1.4"}}
+_msg_cols = [{"field": "giver", "flex": 1}, {"field": "recipient", "flex": 1},
+    {"field": "message", "flex": 11}]
 
 app.layout = dbc.Container([
     html.H1("Kudos Dashboard", className="my-2"),
@@ -263,8 +267,7 @@ def update_leaderboard(_):
     Output("leaderboard-table", "rowData"),
     Input("leaderboard-plot", "clickData"))
 def drill_leaderboard(click):
-    cols = [{"field": "giver", "flex": 1}, {"field": "recipient", "flex": 1},
-        {"field": "message", "flex": 11}]
+    cols = _msg_cols
     if not click:
         return "Click a name to see messages.", cols, []
     name = click["points"][0]["y"]
@@ -302,8 +305,7 @@ def update_stream(_):
     Input("enriched-click", "data"),
     State("stream-data", "data"))
 def drill_topic(click, store):
-    cols = [{"field": "giver", "flex": 1}, {"field": "recipient", "flex": 1},
-        {"field": "message", "flex": 11}]
+    cols = _msg_cols
     if not click or not store:
         return "Click a band to see messages.", cols, []
     pt = click["points"][0]

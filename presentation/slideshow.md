@@ -49,18 +49,18 @@ graph LR
 
 Monthly point budget and conversion rate set by accounting. Over-budget kudos are marked as overflow — payout opportunity lost.
 
-|       | Time  | Given | Received | Budget Remaining | Redeemed |
-|-------|-------|------:|---------:|-----------------:|---------:|
-| Alice | 10:00 |     3 |        2 |                5 |        2 |
-| Bob   | 10:05 |     2 |        3 |                3 |        2 |
-| Alice | 11:00 |     4 |        3 |                1 |        3 |
-| Bob   | 11:05 |     3 |        4 |                0 |        2 |
+|                | Time  | Given | Received | Budget           | Redemption |
+|----------------|------:|------:|---------:|-----------------:|-----------:|
+| Alice Gave     | 10:00 |     2 |        2 |                3 |          1 |
+| Bob Received   | 10:00 |     3 |        3 |                2 |          1 |
+| Alice Gave     | 11:00 |     3 |        3 |                1 |          1 |
+| Bob Received   | 11:00 |     4 |        4 |                0 |          0 |
 
-Bob's 3rd kudos arrived after the budget was exhausted — it overflows and he earns nothing despite being owed.
+Bob's second receipt arrived after the budget was exhausted — it overflows and he earns nothing despite otherwise being owed.
 
 # Demo: Slack Bot
 
-Live demo: onboarding, content check, edit-to-fix, error handling, and private channel rejection.
+Live demo: onboarding, content check, edit-to-fix, accounting cron job, weekly reminder, and private channel rejection.
 
 # Demo: Dashboard
 
@@ -68,11 +68,11 @@ Live demo: operational snapshot, usage & budget forecast, treatment effect plot,
 
 # Architecture
 
-All business logic lives in Postgres functions. The Python app is a 150-line event router.
+All business logic lives in Postgres functions. The Python app is a 136-line event router. 33 automated tests cover all business logic.
 
 ```mermaid
 graph LR
-    S["Slack event"] --> A["app.py<br>150 lines"]
+    S["Slack event"] --> A["app.py<br>136 lines"]
     A --> GK["give_kudos()"]
     GK --> CL["check_kudos_limits()"]
     GK --> TR["try_redeem()<br>redeem or overflow"]
@@ -80,7 +80,7 @@ graph LR
     A --> Reply["Post reply"]
 ```
 
-Edits delete the old point and re-evaluate from scratch. Deletions remove the point.
+Edits hard-delete the old kudos (un-redeeming linked points) and re-evaluate from scratch.
 
 # Scheduled Jobs
 
@@ -89,7 +89,7 @@ Edits delete the old point and re-evaluate from scratch. Deletions remove the po
 | `accounting.py` | Monthly | Report last month's redemptions to accounting channel |
 | `weekly_reminder.py` | Weekly | DM users who haven't given kudos |
 | `backfill.py` | Weekly | Embed kudos, cluster, LLM-summarize topics |
-| `record_users.py` | Weekly | Record covariates for Poisson GLM |
+| `record_users.py` | Weekly | Record exposures for Poisson GLM |
 
 # Treatment Effect Estimation
 
@@ -106,9 +106,11 @@ $$\text{IRR} = \frac{Y_2 / E_2}{Y_1 / E_1} \qquad \text{CI via score test invers
 Kudos messages are embedded into 128-dim vectors using a truncated embedding model, then clustered with KMeans using inverse-log month-frequency weights so older high-volume months don't dominate.
 
 $$w_i = \frac{1}{\ln(1 + c_{m_i})} \qquad k = n_{\text{months}} + 3$$
-Representative messages (nearest 25% to centroid) are sampled and summarized by an LLM into topic labels. 
+Representative messages (nearest 25% to centroid) are sampled and summarized by an LLM into topic labels. Managers can see what behaviors are being recognized and how themes shift over time.
 
+# Demo: Diagnostics Notebook
 
+Live demo: Poisson model diagnostics (quantile residuals, overdispersion, autocorrelation) and cluster diagnostics (elbow plot, silhouette scores, stability).
 
 # Technology Stack
 
@@ -130,13 +132,13 @@ Representative messages (nearest 25% to centroid) are sampled and summarized by 
 
 # Lines of Code
 
-832 lines total — bot, dashboard, cron jobs, schema, and all business logic.
+842 lines total — bot, dashboard, cron jobs, schema, and all business logic.
 
 | Component | Lines |
 |-----------|------:|
-| Python    |   630 |
-| SQL       |   202 |
-| **Total** | **832** |
+| Python    |   634 |
+| SQL       |   208 |
+| **Total** | **842** |
 
 # AI in Development
 
@@ -155,3 +157,10 @@ graph LR
 ```
 
 The bot uses an LLM to gate every kudos for substantive content, and another to summarize topic clusters for the dashboard.
+
+# Questions?
+
+- One Slack message to give kudos — no forms, no approvals
+- Anti-abuse enforced structurally, not by policy
+- Causal measurement of budget impact on activity
+- 842 lines of code, 33 tests, fully automated

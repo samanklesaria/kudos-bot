@@ -12,12 +12,16 @@ def main():
     accounting_channel = os.environ["KUDOS_ACCOUNTING_CHANNEL"]
     with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
         last_month = conn.execute("SELECT * FROM last_month_redemptions").fetchall()
+    def _permalink(c, t, i):
+        try:
+            return f"<{client.chat_getPermalink(channel=c, message_ts=t)['permalink']}|#{i+1}>"
+        except Exception:
+            return f"#{i+1} ({c})"
     if last_month:
         lines = ["*Last month's redemptions by recipient:*"]
         for recipient_id, channels, timestamps, total in last_month:
             links = " ".join(
-                f"<{client.chat_getPermalink(channel=c, message_ts=t)['permalink']}|#{i+1}>"
-                for i, (c, t) in enumerate(zip(channels, timestamps)))
+                _permalink(c, t, i) for i, (c, t) in enumerate(zip(channels, timestamps)))
             lines.append(f"• <@{recipient_id}>: {len(channels)} point(s), ${total:.2f} — {links}")
         client.chat_postMessage(
             channel=accounting_channel,

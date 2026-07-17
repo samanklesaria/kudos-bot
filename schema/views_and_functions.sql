@@ -33,15 +33,12 @@ WHERE k.redeemed_at >= date_trunc('month', CURRENT_DATE) - interval '1 month'
 GROUP BY k.recipient_id, b.conversion_rate;
 
 -- How many points have been redeemed in a given month.
--- ponytail: plpgsql to defer validation — kudos table may not exist yet at creation time
 CREATE FUNCTION redeemed_this_month(p_month DATE DEFAULT date_trunc('month', CURRENT_DATE)::date)
-RETURNS INTEGER AS $fn$
-BEGIN RETURN (
+RETURNS INTEGER LANGUAGE SQL STABLE AS $fn$
     SELECT COUNT(*)::int FROM kudos
     WHERE redeemed_at >= p_month
-      AND redeemed_at < p_month + INTERVAL '1 month');
-END;
-$fn$ LANGUAGE plpgsql STABLE;
+      AND redeemed_at < p_month + INTERVAL '1 month';
+$fn$;
 
 -- Validates that a giver can give kudos right now. Returns NULL on success, error message on failure.
 CREATE FUNCTION check_kudos_limits(p_giver_id VARCHAR, p_recipient_id VARCHAR)
