@@ -11,10 +11,8 @@ CREATE TABLE kudos (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     redeems INTEGER REFERENCES kudos(id) ON DELETE SET NULL,
     embedding vector(128),
-    giver_overflow BOOLEAN NOT NULL DEFAULT FALSE,
-    recipient_overflow BOOLEAN NOT NULL DEFAULT FALSE,
-    CHECK(giver_id <> recipient_id),
-    CHECK(redeemed_at IS NULL OR NOT recipient_overflow)
+    overflow BOOLEAN NOT NULL DEFAULT FALSE,
+    CHECK(giver_id <> recipient_id)
 );
 
 CREATE TABLE users (
@@ -52,5 +50,3 @@ CREATE INDEX idx_kudos_giver_day ON kudos(giver_id, created_at);
 CREATE INDEX idx_kudos_giver_recipient_month ON kudos(giver_id, recipient_id, created_at);
 CREATE UNIQUE INDEX idx_kudos_channel_ts ON kudos(channel_id, message_ts);
 CREATE INDEX idx_kudos_redeemed ON kudos(redeemed_at) WHERE redeemed_at IS NOT NULL;
-CREATE INDEX idx_kudos_unredeemed_recipient ON kudos(recipient_id, created_at)
-    WHERE redeemed_at IS NULL AND NOT recipient_overflow;

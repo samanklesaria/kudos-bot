@@ -1,8 +1,8 @@
 [Unit]
-Description=Monthly kudos accounting report (1st of month, 9am)
+Description=Monthly kudos accounting report (last day of month, 9am)
 
 [Timer]
-OnCalendar=*-*-01 09:00:00
+OnCalendar=*-*~01 09:00:00
 Persistent=true
 
 [Install]

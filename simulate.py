@@ -15,8 +15,8 @@ import psycopg
 from dotenv import load_dotenv
 from datetime import date
 from dateutil.relativedelta import relativedelta
-from itertools import groupby
 from sizecheck import sizecheck
+import subprocess
 
 from cron.backfill import main as backfill
 
@@ -52,6 +52,7 @@ def build_topic_weights(rng):
     w_MT = decay_MT + new_MT
     noise_MT = rng.normal(0, 0.02, (N_MONTHS, max_topics)) * active_MT
     w_MT += np.cumsum(noise_MT, axis=0)
+    np.clip(w_MT, 0, None, out=w_MT)
     w_MT *= active_MT
     w_MT /= w_MT.sum(axis=1, keepdims=True)
     return w_MT
@@ -68,25 +69,25 @@ def simulate_covariates(rng):
 def simulate_ITS_counts(rng, covariates):
     "Simulate weekly counts from a Poisson ITS with covariates, capped around 20/week"
     months = np.arange(N_MONTHS)
-    beta = np.full(N_MONTHS, -1.0)
-    beta[1:] = 0.1 / months[1:] ** 2
+    beta = np.zeros(N_MONTHS)
+    beta[0] = -1.0
+    beta[1] = np.log(2)
     data = {'t': np.repeat(months, 4)}
     X = np.asarray(patsy.dmatrix("C(t, Diff)", data))
     mu = covariates["workday_frac"] * covariates["num_users"] * np.exp(X @ beta)
     mu_M4 = mu.reshape((N_MONTHS, 4))
     return rng.poisson(mu).reshape((N_MONTHS, 4)), mu_M4
 
-def clear_db(conn):
-    conn.execute("DELETE FROM cluster_members")
-    conn.execute("DELETE FROM clusters")
-    conn.execute("DELETE FROM kudos")
-    conn.execute("DELETE FROM budgets")
-    conn.execute("DELETE FROM covariates")
-    conn.execute("DELETE FROM users")
+def clear_db():
+    subprocess.run(
+        ["psql", DATABASE_URL, "-f", "scripts/setup.sql"],
+        check=True)
+    with psycopg.connect(DATABASE_URL) as conn:
+        conn.execute("DELETE FROM budgets")
 
 def write_db(users, budgets, records, covariates, now):
+    clear_db()
     with psycopg.connect(DATABASE_URL) as conn:
-        clear_db(conn)
         for display_name in users:
             conn.execute(
                 "INSERT INTO users (id, display_name) VALUES (%s, %s)", (display_name, display_name))
@@ -102,17 +103,12 @@ def write_db(users, budgets, records, covariates, now):
                 conn.execute(
                     "INSERT INTO covariates (label, week, value) VALUES (%s, %s, %s)",
                     (label, week_str, float(val)))
-        # Insert kudos in chronological order, redeeming monthly
-        sorted_records = sorted(enumerate(records), key=lambda r: r[1][3])
-        for _, month_batch in groupby(sorted_records, key=lambda r: r[1][3].replace(day=1)):
-            batch = list(month_batch)
-            with conn.cursor() as cur:
-                cur.executemany(
-                    "INSERT INTO kudos (giver_id, recipient_id, channel_id, message_ts, message_text, created_at) "
-                    "VALUES (%s, %s, %s, %s, %s, %s)",
-                    [(giver, recipient, "sim", f"{i}", text, kudos_at)
-                     for i, (giver, recipient, text, kudos_at) in batch])
-            conn.execute("SELECT * FROM try_redeem(%s)", (batch[-1][1][3],))
+        for i, (giver, recipient, text, kudos_at) in enumerate(records):
+            conn.execute(
+                "INSERT INTO kudos (giver_id, recipient_id, channel_id, message_ts, message_text, created_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (giver, recipient, "sim", f"{i}", text, kudos_at))
+            conn.execute("SELECT * FROM try_redeem(%s)", (kudos_at,))
 
 @sizecheck
 def choose_texts(counts_M4, texts_N, topics_N, weights_MT, rng):
@@ -139,7 +135,7 @@ def events(now, users, texts_S, weeks_S, rng):
         giver, recipient = rng.choice(users, size=2, replace=False, p=weights)
         yield (giver, recipient, text, week_to_date(now, week))
 
-def main(seed=42):
+def main(seed=2):
     rng = np.random.default_rng(seed)
     texts, targets = load_messages()
     now = date.today().replace(day=1)

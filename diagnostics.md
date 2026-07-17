@@ -1,3 +1,12 @@
+---
+title: Diagnostics
+marimo-version: 0.23.14
+---
+
+```python {.marimo hide_code="true"}
+import marimo as mo
+```
+
 # Poisson ITS Model Diagnostics
 
 The dashboard's IRR estimates come from pairwise Poisson rate comparisons
@@ -128,13 +137,13 @@ Systematic curvature suggests misspecified variance (e.g. overdispersion),
 while outlying tails suggest individual anomalous weeks.
 
 ```python {.marimo}
-fig, ax = plt.subplots(figsize=(5, 5))
-sm.qqplot(qresid, line="45", ax=ax)
-ax.set_title("Q–Q plot of randomized quantile residuals")
-ax.set_xlabel("Theoretical quantiles")
-ax.set_ylabel("Sample quantiles")
-fig.tight_layout()
-fig
+_fig, _ax = plt.subplots(figsize=(5, 5))
+sm.qqplot(qresid, line="45", ax=_ax)
+_ax.set_title("Q–Q plot of randomized quantile residuals")
+_ax.set_xlabel("Theoretical quantiles")
+_ax.set_ylabel("Sample quantiles")
+_fig.tight_layout()
+_fig
 ```
 
 ### Residuals vs. fitted values
@@ -144,14 +153,14 @@ well-fitting Poisson model, residuals should scatter uniformly around zero
 with constant spread.
 
 ```python {.marimo}
-fig, ax = plt.subplots(figsize=(7, 4))
-ax.scatter(mu_hat, qresid, alpha=0.6, s=20)
-ax.axhline(0, color="grey", linestyle="--", linewidth=0.8)
-ax.set_xlabel("Fitted $\\hat{\\mu}$")
-ax.set_ylabel("Quantile residual")
-ax.set_title("Residuals vs. fitted")
-fig.tight_layout()
-fig
+_fig, _ax = plt.subplots(figsize=(7, 4))
+_ax.scatter(mu_hat, qresid, alpha=0.6, s=20)
+_ax.axhline(0, color="grey", linestyle="--", linewidth=0.8)
+_ax.set_xlabel("Fitted $\\hat{\\mu}$")
+_ax.set_ylabel("Quantile residual")
+_ax.set_title("Residuals vs. fitted")
+_fig.tight_layout()
+_fig
 ```
 
 ### Residuals over time
@@ -160,14 +169,14 @@ Serial correlation in residuals violates the independence assumption and
 inflates confidence in IRR estimates. Look for runs of same-sign residuals.
 
 ```python {.marimo}
-fig, ax = plt.subplots(figsize=(8, 3))
-ax.bar(range(len(qresid)), qresid, color=np.where(qresid > 0, "#50B86C", "#D9534F"), width=0.8)
-ax.axhline(0, color="grey", linewidth=0.8)
-ax.set_xlabel("Week index")
-ax.set_ylabel("Quantile residual")
-ax.set_title("Residuals over time")
-fig.tight_layout()
-fig
+_fig, _ax = plt.subplots(figsize=(8, 3))
+_ax.bar(range(len(qresid)), qresid, color=np.where(qresid > 0, "#50B86C", "#D9534F"), width=0.8)
+_ax.axhline(0, color="grey", linewidth=0.8)
+_ax.set_xlabel("Week index")
+_ax.set_ylabel("Quantile residual")
+_ax.set_title("Residuals over time")
+_fig.tight_layout()
+_fig
 ```
 
 ## Overdispersion
@@ -177,42 +186,63 @@ parameter $\hat\phi = \chi^2_P / (n - p)$ is substantially above 1, a
 quasi-Poisson or negative binomial model would be more appropriate, and the
 Score-based IRR confidence intervals are too narrow.
 
+**Note:** With only $n - p$ residual degrees of freedom, $\hat\phi$ has high
+sampling variance. Under a correctly-specified Poisson, $\hat\phi > 1.5$
+occurs $\approx 28\%$ of the time at these sample sizes, so moderate values
+should not be over-interpreted. The $p$-value below tests $H_0{:}\;\phi = 1$
+via the $\chi^2_{n-p}$ reference distribution.
+
 ```python {.marimo}
 pearson_chi2 = result.pearson_chi2
-n, p = len(df), X.shape[1]
-dispersion = pearson_chi2 / (n - p)
-print(f"Pearson χ² = {pearson_chi2:.2f}")
-print(f"Dispersion = {dispersion:.3f}  (n={n}, p={p})")
-if dispersion > 1.5:
-    print("⚠ Substantial overdispersion — consider quasi-Poisson or NB2.")
-elif dispersion > 1.1:
-    print("Mild overdispersion — Poisson CIs may be slightly optimistic.")
+N, p = len(df), X.shape[1]
+_dof = N - p
+dispersion = pearson_chi2 / _dof
+_pval = 1 - stats.chi2.cdf(pearson_chi2, _dof)
+print(f"Pearson χ² = {pearson_chi2:.2f}  (df = {_dof})")
+print(f"Dispersion = {dispersion:.3f}")
+print(f"p-value (H₀: φ = 1) = {_pval:.3f}")
+if _pval < 0.05:
+    print("⚠ Significant overdispersion — consider quasi-Poisson or NB2.")
 else:
-    print("No evidence of overdispersion.")
+    print("No significant overdispersion at α = 0.05.")
 ```
 
 ## Autocorrelation
 
 The Durbin–Watson statistic tests for first-order serial correlation in
-residuals. Values near 2 indicate no autocorrelation; values below 1.5 or
-above 2.5 suggest positive or negative autocorrelation respectively.
+residuals. Values near 2 indicate no autocorrelation; significantly below 2
+suggests positive autocorrelation, above 2 suggests negative.
+
+**Note:** DW has low power at small $n$. With 32 observations and quantile-
+residual randomization, values outside $[1.5, 2.5]$ occur $\approx 15\%$ of
+the time under true independence. The $p$-value below uses a normal
+approximation for the DW null distribution.
 
 ```python {.marimo}
 from statsmodels.stats.stattools import durbin_watson
 
 dw = durbin_watson(qresid)
-print(f"Durbin–Watson = {dw:.3f}")
+# Under H0 (no autocorrelation), E[DW] ≈ 2, Var[DW] ≈ 4/n
+_n = len(qresid)
+_z = (dw - 2) / (2 / np.sqrt(_n))
+_pval = 2 * (1 - stats.norm.cdf(abs(_z)))
+print(f"Durbin–Watson = {dw:.3f}  (n = {_n})")
+print(f"p-value (two-sided) = {_pval:.3f}")
+if _pval < 0.05:
+    print("⚠ Significant autocorrelation at α = 0.05.")
+else:
+    print("No significant autocorrelation at α = 0.05.")
 ```
 
 ACF plot of quantile residuals. Significant spikes beyond lag 0 indicate
 temporal dependence not captured by the period indicators.
 
 ```python {.marimo}
-fig, ax = plt.subplots(figsize=(7, 3))
-sm.graphics.tsa.plot_acf(qresid, lags=min(15, len(qresid) // 2 - 1), ax=ax,
+_fig, _ax = plt.subplots(figsize=(7, 3))
+sm.graphics.tsa.plot_acf(qresid, lags=min(15, len(qresid) // 2 - 1), ax=_ax,
     title="ACF of quantile residuals")
-fig.tight_layout()
-fig
+_fig.tight_layout()
+_fig
 ```
 
 ---
@@ -233,10 +263,10 @@ from pgvector.psycopg import register_vector
 with pool.connection() as conn:
     register_vector(conn)
     conn.row_factory = psycopg.rows.dict_row
-    rows = conn.execute(
+    emb_rows = conn.execute(
         "SELECT id, embedding, to_char(created_at, 'YYYY-MM') AS month "
         "FROM kudos WHERE embedding IS NOT NULL").fetchall()
-emb_df = pd.DataFrame(rows)
+emb_df = pd.DataFrame(emb_rows)
 embeddings = np.array(emb_df["embedding"].tolist())
 embeddings /= np.linalg.norm(embeddings, axis=1, keepdims=True)
 print(f"{len(embeddings)} kudos with embeddings, dim={embeddings.shape[1]}")
@@ -256,13 +286,13 @@ k_range = range(2, min(20, len(embeddings) // 2))
 inertias = [KMeans(n_clusters=k, n_init=5, random_state=0).fit(embeddings).inertia_
     for k in k_range]
 
-fig, ax = plt.subplots(figsize=(7, 4))
-ax.plot(list(k_range), inertias, "o-", markersize=5)
-ax.set_xlabel("$k$")
-ax.set_ylabel("Inertia")
-ax.set_title("Elbow plot")
-fig.tight_layout()
-fig
+_fig, _ax = plt.subplots(figsize=(7, 4))
+_ax.plot(list(k_range), inertias, "o-", markersize=5)
+_ax.set_xlabel("$k$")
+_ax.set_ylabel("Inertia")
+_ax.set_title("Elbow plot")
+_fig.tight_layout()
+_fig
 ```
 
 ## Silhouette scores
@@ -285,13 +315,13 @@ sil_scores = [silhouette_score(embeddings,
     KMeans(n_clusters=k, n_init=5, random_state=0).fit_predict(embeddings))
     for k in k_range]
 
-fig, ax = plt.subplots(figsize=(7, 4))
-ax.plot(list(k_range), sil_scores, "o-", markersize=5, color="#50B86C")
-ax.set_xlabel("$k$")
-ax.set_ylabel("Mean silhouette score")
-ax.set_title("Silhouette score vs. $k$")
-fig.tight_layout()
-fig
+_fig, _ax = plt.subplots(figsize=(7, 4))
+_ax.plot(list(k_range), sil_scores, "o-", markersize=5, color="#50B86C")
+_ax.set_xlabel("$k$")
+_ax.set_ylabel("Mean silhouette score")
+_ax.set_title("Silhouette score vs. $k$")
+_fig.tight_layout()
+_fig
 ```
 
 ## Silhouette profile (current $k$)
@@ -306,19 +336,19 @@ k_current = min(int(n_months + 3.75), len(embeddings) - 1)
 labels = KMeans(n_clusters=k_current, n_init=10, random_state=0).fit_predict(embeddings)
 sil_vals = silhouette_samples(embeddings, labels)
 
-fig, ax = plt.subplots(figsize=(7, 5))
+_fig, _ax = plt.subplots(figsize=(7, 5))
 y_lower = 0
 for i in range(k_current):
     cluster_sil = np.sort(sil_vals[labels == i])
-    ax.barh(range(y_lower, y_lower + len(cluster_sil)), cluster_sil, height=1.0, edgecolor="none")
+    _ax.barh(range(y_lower, y_lower + len(cluster_sil)), cluster_sil, height=1.0, edgecolor="none")
     y_lower += len(cluster_sil) + 2
-ax.axvline(sil_vals.mean(), color="red", linestyle="--", label=f"mean = {sil_vals.mean():.3f}")
-ax.set_xlabel("Silhouette coefficient")
-ax.set_ylabel("Kudos (grouped by cluster)")
-ax.set_title(f"Silhouette profile at $k={k_current}$")
-ax.legend()
-fig.tight_layout()
-fig
+_ax.axvline(sil_vals.mean(), color="red", linestyle="--", label=f"mean = {sil_vals.mean():.3f}")
+_ax.set_xlabel("Silhouette coefficient")
+_ax.set_ylabel("Kudos (grouped by cluster)")
+_ax.set_title(f"Silhouette profile at $k={k_current}$")
+_ax.legend()
+_fig.tight_layout()
+_fig
 ```
 
 ## Calinski–Harabasz index
@@ -335,13 +365,13 @@ ch_scores = [calinski_harabasz_score(embeddings,
     KMeans(n_clusters=k, n_init=5, random_state=0).fit_predict(embeddings))
     for k in k_range]
 
-fig, ax = plt.subplots(figsize=(7, 4))
-ax.plot(list(k_range), ch_scores, "o-", markersize=5, color="#4A90D9")
-ax.set_xlabel("$k$")
-ax.set_ylabel("Calinski–Harabasz index")
-ax.set_title("Calinski–Harabasz vs. $k$")
-fig.tight_layout()
-fig
+_fig, _ax = plt.subplots(figsize=(7, 4))
+_ax.plot(list(k_range), ch_scores, "o-", markersize=5, color="#4A90D9")
+_ax.set_xlabel("$k$")
+_ax.set_ylabel("Calinski–Harabasz index")
+_ax.set_title("Calinski–Harabasz vs. $k$")
+_fig.tight_layout()
+_fig
 ```
 
 ## Cluster stability (subsample agreement)
@@ -354,7 +384,6 @@ clusters are artifacts of noise rather than genuine structure.
 ```python {.marimo}
 from sklearn.metrics import adjusted_rand_score
 
-rng = np.random.default_rng(42)
 n = len(embeddings)
 idx_a = rng.choice(n, size=int(0.8 * n), replace=False)
 idx_b = rng.choice(n, size=int(0.8 * n), replace=False)

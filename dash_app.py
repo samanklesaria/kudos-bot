@@ -47,8 +47,8 @@ def load_snapshot():
         "AND redeemed_at >= date_trunc('month', NOW())")
     overflow = scalar(
         "SELECT COUNT(*)::int FROM kudos "
-        "WHERE (giver_overflow OR recipient_overflow) "
-        "AND created_at >= date_trunc('month', NOW())")
+        "WHERE overflow "
+        "AND redeemed_at >= date_trunc('month', NOW())")
     return budget or 0, spent, overflow
 
 def load_weekly():
@@ -210,6 +210,12 @@ def _add_forecast(fig, df):
             marker=dict(symbol="diamond", size=10, color="#4A90D9"),
             name="Forecast", error_y=dict(type="data", symmetric=False,
                 array=[fc["hi"] - fc["median"]], arrayminus=[fc["median"] - fc["lo"]])))
+        next_month = pd.Timestamp(df["ym"].iloc[-1] + "-01") + pd.DateOffset(months=1)
+        tv = fig.layout.xaxis.tickvals
+        tt = fig.layout.xaxis.ticktext
+        fig.update_layout(xaxis=dict(
+            tickvals=list(tv if tv is not None else []) + [fx],
+            ticktext=list(tt if tt is not None else []) + [next_month.strftime("%b %Y")]))
         return irr_df
     except Exception:
         return pd.DataFrame()

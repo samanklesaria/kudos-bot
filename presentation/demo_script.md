@@ -1,32 +1,40 @@
-# Demo Script
+## Bot Walkthrough
 
-## 1. Bot joins a channel
+Clear the database: `psql $DATABASE_URL <scripts/setup.sql`
 
-Add the bot to a public channel. It posts an onboarding message with a usage example.
+Open https://app.slack.com/client/E0BEK3Q98GZ in both Chrome and Firefox
 
-## 2. Vague kudos (rejected)
+In firefox, open https://app.slack.com/manage/E0BEK3Q98GZ/channels and make a channel.
 
-Post: `@kudos-bot @jane good job`
+Add Lisa, Bob and Carol.
 
-Bot replies asking for a specific action, with an example of what good kudos looks like.
+Invite @kudos to the channel. 
 
-## 3. Edit to fix
+Have Carol give good kudos to Lisa.
 
-Edit the vague message to: `@kudos-bot @jane Great job leading the incident retro today!`
+Have Carol give good kudos to Bob and fail. 
 
-Bot deletes the old rejection, re-evaluates the edited message, and confirms the kudos with auto-redemption.
+Clear the database. 
 
-## 4. Multiple recipients (rejected)
+Have Carol give bad kudos to Bob and fail
 
-Post: `@kudos-bot @jane @bob Great teamwork on the deploy!`
+Edit the message so that the kudos is good. 
 
-Bot replies: "Please give kudos to one person at a time."
+Have Lisa give Carol good kudos.
 
-## 5. Private channel rejection
+Clear the database
+
+Try to give kudos to multiple people.
 
 Invite the bot to a private channel. It posts a message explaining why and immediately leaves.
 
-## 6. Dashboard walkthrough
+Run the accounting script. 
+
+Clear the database
+
+Run the weekly reminder script
+
+## Dashboard walkthrough
 
 Open the dashboard and show each tab:
 

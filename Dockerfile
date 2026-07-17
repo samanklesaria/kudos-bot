@@ -38,7 +38,8 @@ RUN cp systemd/*.service systemd/*.timer /etc/systemd/system/ && \
     DATABASE_URL=postgresql://postgres@localhost/kudos psql -f scripts/setup.sql && \
     service postgresql stop && \
     systemctl enable kudos-bot kudos-dashboard \
-    kudos-backfill.timer kudos-weekly-reminder.timer kudos-accounting.timer
+    kudos-backfill.timer kudos-weekly-reminder.timer kudos-accounting.timer \
+    kudos-llama-chat kudos-llama-embed
 
 EXPOSE 8050
 

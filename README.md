@@ -110,11 +110,21 @@ cd /tmp/pg-schema-diff && go build -o "$(go env GOPATH)/bin/pg-schema-diff" ./cm
 # Add an initial budget
 psql $DATABASE_URL <scripts/setup.sql
 
+# Start the LLMs in a separate terminal
+sh scripts/run_llms.sh
+
+# Get dependencies
+uv sync --dev
+
 # Start the bot
 uv run python app.py
 
-# Start the dashboard
+# OR simulate fake data and run the dashboard
+uv run simulate.py
 uv run python dash_app.py
+
+# OR start the marimo diagnostics notebook 
+uv run marimo edit diagnostics.md
 ```
 
 ### Testing

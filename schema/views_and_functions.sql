@@ -1,35 +1,20 @@
--- How many points-worth of money is each user owed?
-CREATE VIEW balances AS
-SELECT *, GREATEST(0, LEAST(given, received) - redeemed)::INTEGER AS owed
-FROM (SELECT giver_id,
-        COUNT(*) FILTER (WHERE NOT giver_overflow) AS given,
-        (SELECT COUNT(*) FROM kudos r WHERE r.recipient_id = k.giver_id AND NOT r.recipient_overflow) AS received,
-        (SELECT COUNT(*) FROM kudos r WHERE r.recipient_id = k.giver_id AND NOT r.recipient_overflow AND r.redeemed_at IS NOT NULL) AS redeemed
-    FROM kudos k
-    GROUP BY giver_id) sub;
-
 -- Applicable budget as of a given date (defaults to today).
 CREATE FUNCTION effective_budget(p_as_of DATE DEFAULT CURRENT_DATE)
 RETURNS TABLE(conversion_rate NUMERIC, point_budget INTEGER) LANGUAGE SQL STABLE AS $$
-    (SELECT b.conversion_rate, b.point_budget
-    FROM budgets b
+    (SELECT b.conversion_rate, b.point_budget FROM budgets b
     WHERE b.month_date <= p_as_of
     ORDER BY b.month_date DESC)
-    UNION ALL
-    (SELECT 1, 0)
-    LIMIT 1;
+    UNION ALL (SELECT 1, 0) LIMIT 1;
 $$;
 
--- Last month's redeemed kudos aggregated by recipient.
-CREATE VIEW last_month_redemptions AS
+-- Current month's redeemed kudos aggregated by recipient.
+CREATE VIEW current_month_redemptions AS
 SELECT k.recipient_id,
        array_agg(k.channel_id) AS channels,
        array_agg(k.message_ts) AS timestamps,
        count(*) * b.conversion_rate AS total
-FROM kudos k, effective_budget((date_trunc('month', CURRENT_DATE) - interval '1 month')::date) b
-WHERE k.redeemed_at >= date_trunc('month', CURRENT_DATE) - interval '1 month'
-  AND k.redeemed_at < date_trunc('month', CURRENT_DATE)
-  AND NOT k.recipient_overflow
+FROM kudos k, effective_budget() b
+WHERE k.redeemed_at >= date_trunc('month', CURRENT_DATE) AND NOT k.overflow
 GROUP BY k.recipient_id, b.conversion_rate;
 
 -- How many points have been redeemed in a given month.
@@ -56,26 +41,24 @@ RETURNS VARCHAR LANGUAGE SQL AS $fn$
         AND created_at >= date_trunc('month', NOW());
 $fn$;
 
--- Pairs of (received kudos to redeem, giving kudos that redeems it).
 CREATE VIEW to_redeem AS
-SELECT kudos_id,
-    (SELECT k.id FROM kudos k
-        WHERE k.giver_id = sub.giver_id
-        AND k.redeems IS NULL AND NOT k.giver_overflow
-        ORDER BY k.created_at LIMIT 1) AS redeemer_id
-FROM (SELECT giver_id,
-    (SELECT k.id FROM kudos k
-        WHERE k.recipient_id = b.giver_id
-        AND k.redeemed_at IS NULL AND NOT k.recipient_overflow
-        ORDER BY k.created_at LIMIT 1) AS kudos_id
-    FROM balances b WHERE owed > 0) sub
-WHERE kudos_id IS NOT NULL;
+WITH gives AS (
+    SELECT id, ROW_NUMBER() OVER (ORDER BY created_at) AS rn
+    FROM kudos WHERE redeems IS NULL),
+receives AS (
+    SELECT id, ROW_NUMBER() OVER (ORDER BY created_at) AS rn
+    FROM kudos WHERE redeemed_at IS NULL AND NOT overflow)
+SELECT gives.id AS give_id, receives.id as receive_id, gives.rn as rn
+FROM gives JOIN receives on gives.rn = receives.rn
+ORDER BY gives.rn;
 
--- How many points remain in this month's budget.
+-- How many points remain in this month's budget?
 CREATE FUNCTION remaining_budget(p_as_of DATE DEFAULT CURRENT_DATE)
-RETURNS INTEGER LANGUAGE SQL STABLE AS $fn$
-    SELECT GREATEST(0, b.point_budget - redeemed_this_month(p_as_of))::int
-    FROM effective_budget(p_as_of) b;
+RETURNS INTEGER LANGUAGE plpgsql STABLE AS $fn$
+BEGIN
+    RETURN (SELECT GREATEST(0, b.point_budget - redeemed_this_month(date_trunc('month', p_as_of)::date))::int
+            FROM effective_budget(p_as_of) b);
+END;
 $fn$;
 
 -- Attempts to redeem points. p_as_of overrides the redemption timestamp (for simulation).
@@ -87,20 +70,21 @@ BEGIN
     v_remaining := remaining_budget(p_as_of::date);
     RETURN QUERY
     WITH pairs AS (
-        SELECT kudos_id, redeemer_id FROM to_redeem LIMIT v_remaining
+        SELECT rn, give_id, receive_id FROM to_redeem
     ),
     redeemed AS (
-        UPDATE kudos SET redeemed_at = p_as_of
-        WHERE id IN (SELECT kudos_id FROM pairs)
-        RETURNING id, recipient_id
+        UPDATE kudos SET redeemed_at = p_as_of, overflow = pairs.rn > v_remaining
+        FROM pairs
+        WHERE kudos.id = pairs.receive_id
+        RETURNING recipient_id
     ),
     linked AS (
-        UPDATE kudos SET redeems = p.kudos_id
-        FROM pairs p WHERE kudos.id = p.redeemer_id
+        UPDATE kudos SET redeems = p.receive_id
+        FROM pairs p WHERE kudos.id = p.give_id
     )
     SELECT
         COALESCE(array_agg(DISTINCT recipient_id), '{}'),
-        count(*) = v_remaining AND v_remaining > 0
+        count(*) >= v_remaining AND v_remaining > 0
     FROM redeemed;
 END;
 $fn$ LANGUAGE plpgsql;
@@ -140,7 +124,7 @@ SELECT yw, ym, acquired, redeemed, b.point_budget, b.conversion_rate FROM (
     SELECT to_char(k.created_at, 'IYYY-IW') AS yw,
            to_char(k.created_at, 'YYYY-MM') AS ym,
            COUNT(*)::int AS acquired,
-           COUNT(*) FILTER (WHERE k.redeemed_at IS NOT NULL)::int AS redeemed
+           COUNT(*) FILTER (WHERE k.redeems IS NOT NULL)::int AS redeemed
     FROM kudos k
     GROUP BY yw, ym) w
 JOIN LATERAL effective_budget((w.ym || '-01')::date) b ON TRUE
@@ -176,10 +160,9 @@ JOIN users ug ON ug.id = k.giver_id
 JOIN users ur ON ur.id = k.recipient_id;
 
 -- Hard-delete a kudos, un-redeeming any kudos it had redeemed.
--- ponytail: plpgsql to defer validation — redeems column may not exist yet at creation time
 CREATE PROCEDURE delete_kudos(p_channel_id VARCHAR, p_message_ts VARCHAR) LANGUAGE plpgsql AS $fn$
 BEGIN
-    UPDATE kudos SET redeemed_at = NULL, redeems = NULL
+    UPDATE kudos SET redeemed_at = NULL
     WHERE id IN (SELECT redeems FROM kudos WHERE channel_id = p_channel_id AND message_ts = p_message_ts AND redeems IS NOT NULL);
     DELETE FROM kudos WHERE channel_id = p_channel_id AND message_ts = p_message_ts;
     PERFORM try_redeem();

@@ -22,7 +22,10 @@
         "chat:write.public",
         "im:read",
         "im:write",
-        "users:read"
+        "users:read",
+        "channels:join",
+        "groups:read",
+        "groups:write"
       ],
       "user": [
         "channels:history",
@@ -33,7 +36,7 @@
   },
   "settings": {
     "event_subscriptions": {
-      "bot_events": ["app_mention", "message.channels"]
+      "bot_events": ["app_mention", "message.channels", "member_joined_channel"]
     },
     "interactivity": {
       "is_enabled": true
