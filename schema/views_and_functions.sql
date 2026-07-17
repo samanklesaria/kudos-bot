@@ -1,9 +1,10 @@
 -- How many points-worth of money is each user owed?
 CREATE VIEW balances AS
-SELECT *, GREATEST(0, LEAST(given, received))::INTEGER AS owed
+SELECT *, GREATEST(0, LEAST(given, received) - redeemed)::INTEGER AS owed
 FROM (SELECT giver_id,
-        COUNT(*) FILTER (WHERE deleted_at IS NULL AND NOT giver_overflow and redeemed_at is NULL) AS given,
-        (SELECT COUNT(*) FROM kudos r WHERE r.recipient_id = k.giver_id AND r.deleted_at IS NULL AND NOT r.recipient_overflow) AS received
+        COUNT(*) FILTER (WHERE deleted_at IS NULL AND NOT giver_overflow) AS given,
+        (SELECT COUNT(*) FROM kudos r WHERE r.recipient_id = k.giver_id AND r.deleted_at IS NULL AND NOT r.recipient_overflow) AS received,
+        (SELECT COUNT(*) FROM kudos r WHERE r.recipient_id = k.giver_id AND r.deleted_at IS NULL AND r.redeemed_at IS NOT NULL) AS redeemed
     FROM kudos k
     GROUP BY giver_id) sub;
 
@@ -19,7 +20,6 @@ RETURNS TABLE(conversion_rate NUMERIC, point_budget INTEGER) LANGUAGE SQL STABLE
     LIMIT 1;
 $$;
 
-
 -- Last month's redeemed kudos aggregated by recipient.
 CREATE VIEW last_month_redemptions AS
 SELECT k.recipient_id,
@@ -34,7 +34,6 @@ WHERE k.redeemed_at >= date_trunc('month', CURRENT_DATE) - interval '1 month'
 GROUP BY k.recipient_id, b.conversion_rate;
 
 -- How many points have been redeemed in a given month.
--- ponytail: plpgsql to defer validation — kudos table may not exist yet at creation time
 CREATE FUNCTION redeemed_this_month(p_month DATE DEFAULT date_trunc('month', CURRENT_DATE)::date)
 RETURNS INTEGER AS $fn$
 BEGIN RETURN (
@@ -117,21 +116,19 @@ CREATE FUNCTION give_kudos(
     p_message_text TEXT DEFAULT NULL
 ) RETURNS TABLE(error VARCHAR, conversion_rate NUMERIC, redeemed_user_ids VARCHAR[],
                 notify_budget_exhausted BOOLEAN) AS $fn$
-DECLARE
-    v_error VARCHAR(128);
-    v_inserted BOOLEAN;
+DECLARE v_error VARCHAR(128);
 BEGIN
     v_error := check_kudos_limits(p_giver_id, p_recipient_id);
-    WITH ins AS (
-        INSERT INTO kudos (giver_id, recipient_id, channel_id, message_ts, message_text)
-        SELECT p_giver_id, p_recipient_id, p_channel_id, p_message_ts, p_message_text
-        WHERE v_error IS NULL
-        ON CONFLICT (channel_id, message_ts) WHERE deleted_at IS NULL DO NOTHING
-        RETURNING id)
-    SELECT EXISTS(SELECT 1 FROM ins) INTO v_inserted;
-    IF NOT v_inserted AND v_error IS NULL THEN RETURN; END IF;
+    IF v_error IS NOT NULL THEN
+        RETURN QUERY SELECT v_error, NULL::NUMERIC, '{}'::VARCHAR[], FALSE;
+        RETURN;
+    END IF;
+    INSERT INTO kudos (giver_id, recipient_id, channel_id, message_ts, message_text)
+    VALUES (p_giver_id, p_recipient_id, p_channel_id, p_message_ts, p_message_text)
+    ON CONFLICT (channel_id, message_ts) WHERE deleted_at IS NULL DO NOTHING;
+    IF NOT FOUND THEN RETURN; END IF;
     RETURN QUERY
-    SELECT v_error,
+    SELECT NULL::VARCHAR,
         b.conversion_rate,
         r.redeemed_user_ids,
         r.notify_budget_exhausted
@@ -148,10 +145,7 @@ SELECT yw, ym, acquired, redeemed, b.point_budget, b.conversion_rate FROM (
            COUNT(*) FILTER (WHERE k.redeemed_at IS NOT NULL)::int AS redeemed
     FROM kudos k WHERE k.deleted_at IS NULL
     GROUP BY yw, ym) w
-JOIN LATERAL (
-    SELECT point_budget, conversion_rate FROM budgets
-    WHERE month_date <= (w.ym || '-01')::date
-    ORDER BY month_date DESC LIMIT 1) b ON TRUE
+JOIN LATERAL effective_budget((w.ym || '-01')::date) b ON TRUE
 ORDER BY yw;
 
 -- Points received per person.

@@ -330,4 +330,4 @@ def drill_topic(click, store):
     return f"Topic: {summary} ({month})", cols, msgs.to_dict("records")
 
 if __name__ == "__main__":
-    app.run(os.environ.get("DASH_DEBUG"))
+    app.run(debug=os.environ.get("DASH_DEBUG", "").lower() in ("1", "true"))

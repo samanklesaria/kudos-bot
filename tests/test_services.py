@@ -62,7 +62,7 @@ def _give(conn, giver, recipient, ts, text=None, backdate_days=0):
         (giver, recipient, ts, text)).fetchone()
     if backdate_days > 0:
         conn.execute(
-            "UPDATE kudos SET created_at = created_at - INTERVAL '%s days' WHERE message_ts = %s",
+            "UPDATE kudos SET created_at = created_at - %s * INTERVAL '1 day' WHERE message_ts = %s",
             (backdate_days, ts))
     return GiveResult(row, giver, recipient)
 
