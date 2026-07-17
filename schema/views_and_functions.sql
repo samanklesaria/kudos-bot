@@ -26,7 +26,7 @@ SELECT k.recipient_id,
        array_agg(k.channel_id) AS channels,
        array_agg(k.message_ts) AS timestamps,
        count(*) * b.conversion_rate AS total
-FROM kudos k, effective_budget() b
+FROM kudos k, effective_budget((date_trunc('month', CURRENT_DATE) - interval '1 month')::date) b
 WHERE k.redeemed_at >= date_trunc('month', CURRENT_DATE) - interval '1 month'
   AND k.redeemed_at < date_trunc('month', CURRENT_DATE)
   AND k.deleted_at IS NULL
@@ -46,28 +46,19 @@ $fn$ LANGUAGE plpgsql STABLE;
 
 -- Validates that a giver can give kudos right now. Returns NULL on success, error message on failure.
 CREATE FUNCTION check_kudos_limits(p_giver_id VARCHAR, p_recipient_id VARCHAR)
-RETURNS VARCHAR AS $fn$
-BEGIN
-    IF p_giver_id = p_recipient_id THEN
-        RETURN $$You can't give kudos to yourself!$$;
-    END IF;
-
-    IF EXISTS(SELECT 1 FROM kudos k
-              WHERE k.giver_id = p_giver_id AND k.deleted_at IS NULL
-                AND k.created_at >= date_trunc('day', NOW())) THEN
-        RETURN $$You've already given kudos today. Try again tomorrow!$$;
-    END IF;
-
-    IF EXISTS(SELECT 1 FROM kudos k
-              WHERE k.giver_id = p_giver_id AND k.recipient_id = p_recipient_id
-                AND k.deleted_at IS NULL
-                AND k.created_at >= date_trunc('month', NOW())) THEN
-        RETURN $$You've already given kudos to this person this month.$$;
-    END IF;
-
-    RETURN NULL;
-END;
-$fn$ LANGUAGE plpgsql;
+RETURNS VARCHAR LANGUAGE SQL AS $fn$
+    SELECT CASE
+        WHEN p_giver_id = p_recipient_id
+            THEN 'You can''t give kudos to yourself!'
+        WHEN bool_or(created_at >= date_trunc('day', NOW()))
+            THEN 'You''ve already given kudos today. Try again tomorrow!'
+        WHEN bool_or(recipient_id = p_recipient_id)
+            THEN 'You''ve already given kudos to this person this month.'
+    END
+    FROM kudos
+    WHERE giver_id = p_giver_id AND deleted_at IS NULL
+        AND created_at >= date_trunc('month', NOW());
+$fn$;
 
 CREATE VIEW to_redeem AS
 SELECT giver_id,
@@ -78,13 +69,11 @@ SELECT giver_id,
     FROM balances b WHERE owed > 0;
 
 -- How many points remain in this month's budget.
-CREATE FUNCTION remaining_budget()
-RETURNS INTEGER AS $fn$
-BEGIN RETURN (
-    SELECT GREATEST(0, b.point_budget - redeemed_this_month())::int
-    FROM effective_budget() b);
-END;
-$fn$ LANGUAGE plpgsql STABLE;
+CREATE FUNCTION remaining_budget(p_as_of DATE DEFAULT CURRENT_DATE)
+RETURNS INTEGER LANGUAGE SQL STABLE AS $fn$
+    SELECT GREATEST(0, b.point_budget - redeemed_this_month(p_as_of))::int
+    FROM effective_budget(p_as_of) b;
+$fn$;
 
 -- Attempts to redeem points. p_as_of overrides the redemption timestamp (for simulation).
 CREATE FUNCTION try_redeem(p_as_of TIMESTAMPTZ DEFAULT NOW())
@@ -92,9 +81,7 @@ RETURNS TABLE(redeemed_user_ids VARCHAR[], notify_budget_exhausted BOOLEAN) AS $
 DECLARE v_remaining INTEGER;
 BEGIN
     PERFORM pg_advisory_xact_lock(hashtext('try_redeem'));
-    v_remaining := COALESCE((
-        SELECT GREATEST(0, b.point_budget - redeemed_this_month(p_as_of::date))::int
-        FROM effective_budget(p_as_of::date) b), 0);
+    v_remaining := remaining_budget(p_as_of::date);
     RETURN QUERY
     WITH updated AS (
         UPDATE kudos SET redeemed_at = p_as_of
@@ -180,13 +167,9 @@ JOIN users ur ON ur.id = k.recipient_id
 WHERE k.deleted_at IS NULL;
 
 -- Soft-delete a kudos. Returns one row per deleted kudos, or no rows if not found.
--- ponytail: plpgsql to defer validation — kudos table may not exist yet at creation time
 CREATE FUNCTION delete_kudos(p_channel_id VARCHAR, p_message_ts VARCHAR)
-RETURNS TABLE(was_redeemed BOOLEAN, recipient VARCHAR) AS $fn$
-BEGIN
-    RETURN QUERY
+RETURNS TABLE(was_redeemed BOOLEAN, recipient VARCHAR) LANGUAGE SQL AS $fn$
     UPDATE kudos SET deleted_at = NOW()
     WHERE channel_id = p_channel_id AND message_ts = p_message_ts AND deleted_at IS NULL
     RETURNING redeemed_at IS NOT NULL, recipient_id;
-END;
-$fn$ LANGUAGE plpgsql;
+$fn$;

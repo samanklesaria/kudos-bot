@@ -12,31 +12,24 @@ from collections import Counter
 from sklearn.cluster import KMeans
 
 load_dotenv()
-DATABASE_URL = os.environ["DATABASE_URL"]
-EMBEDDING_URI = os.environ["EMBEDDING_URI"]
-CHAT_URI = os.environ["CHAT_URI"]
-
-# ── LLM helpers ───────────────────────────────────────────────────────────
 
 def compute_embeddings(texts):
-    resp = requests.post(f"{EMBEDDING_URI}/v1/embeddings",
+    resp = requests.post(f"{os.environ['EMBEDDING_URI']}/v1/embeddings",
         json={"input": texts}).json()
     vecs = np.array([d["embedding"][:128] for d in resp["data"]])
     return vecs / np.linalg.norm(vecs, axis=1, keepdims=True)
 
 def summarize_cluster(texts):
     msgs = "\n".join(f"- {t}" for t in texts)
-    resp = requests.post(f"{CHAT_URI}/v1/chat/completions", json={
+    resp = requests.post(f"{os.environ['CHAT_URI']}/v1/chat/completions", json={
         "messages": [{"role": "user", "content":
             f"Here are messages that share a common theme:\n{msgs}\n\n"
             "What is the common theme? Reply with only a short topic label."}],
         "max_tokens": 50}).json()
     return resp["choices"][0]["message"]["content"].strip()
 
-# ── Main ──────────────────────────────────────────────────────────────────
-
 def main():
-    with psycopg.connect(DATABASE_URL) as conn:
+    with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
         register_vector(conn)
         backfill_embeddings(conn)
         backfill_clusters(conn)
@@ -57,6 +50,13 @@ def backfill_embeddings(conn):
             cur.execute("UPDATE kudos SET embedding = %s WHERE id = %s", (vec, kid))
     print(f"  Done. {len(rows)} embeddings written.")
 
+def _fit_clusters(embeddings, k, prev_centers, sample_weight):
+    if prev_centers is not None and len(prev_centers) <= k:
+        init = prev_centers if len(prev_centers) == k else \
+            np.vstack([prev_centers, KMeans(n_clusters=k - len(prev_centers), n_init=1).fit(embeddings).cluster_centers_])
+        return KMeans(n_clusters=k, init=init, n_init=1).fit(embeddings, sample_weight=sample_weight)
+    return KMeans(n_clusters=k, n_init=10).fit(embeddings, sample_weight=sample_weight)
+
 def backfill_clusters(conn):
     rows = conn.execute(
         "SELECT id, embedding, message_text, to_char(created_at, 'YYYY-MM') AS month "
@@ -72,22 +72,11 @@ def backfill_clusters(conn):
     embeddings /= np.linalg.norm(embeddings, axis=1, keepdims=True)
     month_counts = Counter(months)
     sample_weight = np.array([1.0 / np.log(1 + month_counts[m]) for m in months])
-    n_months = len(month_counts)
-    # Warm-start from previous centers if available
     prev_centers = conn.execute("SELECT center FROM clusters ORDER BY id").fetchall()
     prev_centers = np.array([r[0] for r in prev_centers]) if prev_centers else None
-    k = min(int(n_months + 0.75 + 3), len(rows) - 1)
+    k = min(int(len(month_counts) + 0.75 + 3), len(rows) - 1)
     print(f"Clustering {len(rows)} kudos (k={k})...")
-
-    if prev_centers is not None and len(prev_centers) <= k:
-        if len(prev_centers) == k:
-            init = prev_centers
-        else:
-            extra = KMeans(n_clusters=k - len(prev_centers), n_init=1).fit(embeddings)
-            init = np.vstack([prev_centers, extra.cluster_centers_])
-        model = KMeans(n_clusters=k, init=init, n_init=1).fit(embeddings, sample_weight=sample_weight)
-    else:
-        model = KMeans(n_clusters=k, n_init=10).fit(embeddings, sample_weight=sample_weight)
+    model = _fit_clusters(embeddings, k, prev_centers, sample_weight)
     labels = model.labels_
     centers = model.cluster_centers_
 

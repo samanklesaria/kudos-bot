@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 from dotenv import load_dotenv
@@ -14,9 +15,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 ACCOUNTING_CHANNEL = os.environ.get("KUDOS_ACCOUNTING_CHANNEL")
-CHAT_URI = os.environ["CHAT_URI"]
-DATABASE_URL = os.environ["DATABASE_URL"]
-pool = ConnectionPool(DATABASE_URL)
+pool = ConnectionPool(os.environ["DATABASE_URL"])
 app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
 
 USER_MENTION_RE = re.compile(r"<@(U[A-Z0-9]+)>")
@@ -24,59 +23,34 @@ USER_MENTION_RE = re.compile(r"<@(U[A-Z0-9]+)>")
 def is_concrete_praise(text):
     try:
         response = requests.post(
-            f"{CHAT_URI}/v1/chat/completions",
+            f"{os.environ["CHAT_URI"]}/v1/chat/completions",
             timeout=10,
             json={
                 "messages": [
                     {"role": "system", "content": (
                         "You are a content classifier. The user will provide a "
-                        "kudos message. Does it praise someone for a specific, concrete, "
+                        "kudos message. Does it praise someone for a specific, concrete "
                         "action they took? Reply with only YES or NO.")},
                     {"role": "user", "content": text}],
                 "max_tokens": 5}).json()
-        check = response["choices"][0]["message"]["content"].strip().upper()
-        return check.startswith("YES")
+        return response["choices"][0]["message"]["content"].strip().upper().startswith("YES")
     except Exception:
         logger.warning("LLM content gate failed, assuming good faith")
         return True
 
+def _get_display_name(user_id):
+    info = app.client.users_info(user=user_id)
+    return info["user"]["profile"].get("display_name") or info["user"]["real_name"]
 
-def _try_give_kudos(giver_id, recipient_id, channel_id, message_ts, text):
-    if not is_concrete_praise(text):
-        app.client.chat_postMessage(
-            channel=channel_id,
-            text="Your kudos needs to mention a specific action. Please edit your message to be more specific. "
-                 "Example: `@kudos @someone Great job leading the incident retro today!`",
-            thread_ts=message_ts)
-        return
-    giver_info = app.client.users_info(user=giver_id)
-    giver_name = giver_info["user"]["profile"].get("display_name") or giver_info["user"]["real_name"]
-    recipient_info = app.client.users_info(user=recipient_id)
-    recipient_name = recipient_info["user"]["profile"].get("display_name") or recipient_info["user"]["real_name"]
-    with pool.connection() as conn:
-        for uid, name in [(giver_id, giver_name), (recipient_id, recipient_name)]:
-            conn.execute(
-                "INSERT INTO users (id, display_name) VALUES (%s, %s) "
-                "ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name",
-                (uid, name))
-        row = conn.execute(
-            "SELECT * FROM give_kudos(%s, %s, %s, %s, %s)",
-            (giver_id, recipient_id, channel_id, message_ts, text)).fetchone()
-    if row is None:
-        return
-    error, rate, redeemed_ids, notify_budget = row
-    if error:
-        app.client.chat_postMessage(channel=channel_id, text=error, thread_ts=message_ts)
-        return
-    msg = f"<@{giver_id}> gave kudos to <@{recipient_id}>!"
-    if redeemed_ids:
-        redeemed_str = " and ".join(f"<@{uid}>" for uid in redeemed_ids)
-        msg += f" ({redeemed_str} auto-redeemed 1 point — ${rate:.2f})"
-    app.client.chat_postMessage(channel=channel_id, text=msg, thread_ts=message_ts)
-    if notify_budget and ACCOUNTING_CHANNEL:
-        app.client.chat_postMessage(
-            channel=ACCOUNTING_CHANNEL,
-            text="Budget alert: This month's kudos budget has been exhausted.")
+def _give_kudos_db(conn, giver_id, recipient_id, channel_id, message_ts, text, giver_name, recipient_name):
+    for uid, name in [(giver_id, giver_name), (recipient_id, recipient_name)]:
+        conn.execute(
+            "INSERT INTO users (id, display_name) VALUES (%s, %s) "
+            "ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name",
+            (uid, name))
+    return conn.execute(
+        "SELECT * FROM give_kudos(%s, %s, %s, %s, %s)",
+        (giver_id, recipient_id, channel_id, message_ts, text)).fetchone()
 
 def _parse_kudos(text, bot_user_id):
     """Extract the single recipient from a kudos message, or return an error string."""
@@ -93,15 +67,38 @@ def _handle_kudos(giver_id, channel_id, message_ts, text, bot_user_id, *, delete
         if not delete_first:
             app.client.chat_postMessage(channel=channel_id, text=error, thread_ts=message_ts)
         return
-    if delete_first:
-        with pool.connection() as conn:
-            row = _delete_kudos(conn, channel_id, message_ts)
-        _notify_redeemed_deletion(row)
-    _try_give_kudos(giver_id, recipient, channel_id, message_ts, text)
+    if not is_concrete_praise(text):
+        app.client.chat_postMessage(
+            channel=channel_id,
+            text="Your kudos needs to mention a specific action. Please edit your message to be more specific. "
+                 "Example: `@kudos @someone Great job leading the incident retro today!`",
+            thread_ts=message_ts)
+        return
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        giver_name, recipient_name = ex.map(_get_display_name, [giver_id, recipient])
+    with pool.connection() as conn:
+        if delete_first:
+            _delete_kudos(conn, channel_id, message_ts)
+        row = _give_kudos_db(conn, giver_id, recipient, channel_id, message_ts, text, giver_name, recipient_name)
+    if row is None:
+        return
+    error, rate, redeemed_ids, notify_budget = row
+    if error:
+        app.client.chat_postMessage(channel=channel_id, text=error, thread_ts=message_ts)
+        return
+    msg = f"<@{giver_id}> gave kudos to <@{recipient}>!"
+    if redeemed_ids:
+        redeemed_str = " and ".join(f"<@{uid}>" for uid in redeemed_ids)
+        msg += f" ({redeemed_str} auto-redeemed 1 point — ${rate:.2f})"
+    app.client.chat_postMessage(channel=channel_id, text=msg, thread_ts=message_ts)
+    if notify_budget and ACCOUNTING_CHANNEL:
+        app.client.chat_postMessage(
+            channel=ACCOUNTING_CHANNEL,
+            text="Budget alert: This month's kudos budget has been exhausted.")
 
 @app.event("app_mention")
 def handle_mention(event, context):
-    if "edited" in event or event.get("subtype") == "message_changed":
+    if "edited" in event:
         return
     _handle_kudos(event["user"], event["channel"], event["ts"],
         event.get("text", ""), context.bot_user_id)
@@ -121,10 +118,8 @@ def handle_message_changed(event, context):
         text, context.bot_user_id, delete_first=True)
 
 def _delete_kudos(conn, channel_id, message_ts):
-    return conn.execute(
+    row = conn.execute(
         "SELECT * FROM delete_kudos(%s, %s)", (channel_id, message_ts)).fetchone()
-
-def _notify_redeemed_deletion(row):
     if row and row[0] and ACCOUNTING_CHANNEL:
         app.client.chat_postMessage(
             channel=ACCOUNTING_CHANNEL,
@@ -138,8 +133,7 @@ def handle_message_deleted(event):
     if not message_ts:
         return
     with pool.connection() as conn:
-        row = _delete_kudos(conn, event["channel"], message_ts)
-    _notify_redeemed_deletion(row)
+        _delete_kudos(conn, event["channel"], message_ts)
 
 @app.event("member_joined_channel")
 def handle_member_joined(event, context):
@@ -156,7 +150,7 @@ def handle_member_joined(event, context):
     app.client.chat_postMessage(
         channel=channel_id,
         text="Hi! I'm the kudos bot. Recognize a colleague by mentioning me: "
-             "`@kudos-bot @someone Great job leading the incident retro today!`")
+             "`@kudos @someone Great job leading the incident retro today!`")
 
 @app.event("message")
 def handle_message_default():

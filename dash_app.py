@@ -12,6 +12,7 @@ import pandas as pd
 import psycopg
 from psycopg_pool import ConnectionPool
 import plotly.graph_objects as go
+import plotly.express as px
 from scipy import stats
 from dash import Dash, html, dcc, callback, Input, Output, State
 import dash_ag_grid as dag
@@ -22,12 +23,11 @@ from pgvector.psycopg import register_vector
 
 load_dotenv()
 DATABASE_URL = os.environ["DATABASE_URL"]
-pool = ConnectionPool(DATABASE_URL)
+pool = ConnectionPool(DATABASE_URL, configure=register_vector)
 
 def query(sql, params=None):
     with pool.connection() as conn:
         conn.row_factory = psycopg.rows.dict_row
-        register_vector(conn)
         rows = conn.execute(sql, params).fetchall()
         return pd.DataFrame(rows) if rows else pd.DataFrame()
 
@@ -166,27 +166,9 @@ app.clientside_callback(
     Output("enriched-click", "data"),
     Input("stream-plot", "clickData"))
 
-@callback(
-    Output("snapshot", "children"),
-    Output("usage-plot", "figure"),
-    Output("irr-plot", "figure"),
-    Input("snapshot", "id"))
-def update_usage(_):
-    budget, spent, overflow = load_snapshot()
-    snap = [dbc.Col(dbc.Card(dbc.CardBody([
-        html.H6(label, className="card-subtitle text-muted"),
-        html.H3(f"{val} pts")]), className="shadow-sm"), md=4)
-        for label, val in [("Monthly Budget", budget), ("Spent This Month", spent), ("Overflowed This Month", overflow)]]
-
-    df = load_weekly()
-    if df.empty:
-        empty = go.Figure()
-        return snap, empty, empty
-
+def _build_usage_chart(df):
     df["x"] = range(len(df))
     weekly_budget = df["point_budget"].astype(float) / 4
-
-    # Usage chart
     fig = go.Figure()
     fig.add_trace(go.Bar(x=df["x"], y=df["acquired"], name="Acquired",
         marker_color="#50B86C"))
@@ -196,8 +178,6 @@ def update_usage(_):
     budget_y = pd.concat([weekly_budget, pd.Series([weekly_budget.iloc[-1]])])
     fig.add_trace(go.Scatter(x=budget_x, y=budget_y, name="Budget/4",
         mode="lines", line=dict(dash="dot", color="red")))
-
-    # Month labels on x-axis + dollar budget annotations
     month_ticks = df.groupby("ym")["x"].first()
     month_budgets = df.groupby("ym").first()
     dollar_annotations = [dict(
@@ -215,24 +195,25 @@ def update_usage(_):
             pd.Timestamp(m + "-01").strftime("%b %Y") for m in month_ticks.index]),
         yaxis_title="Points", legend=dict(orientation="h", y=1, yanchor="top",
             bgcolor="rgba(255,255,255,0.7)"))
+    return fig
 
-    # Forecast
+def _add_forecast(fig, df):
     try:
         weeks_per_month = df.groupby("ym")["ym"].transform("size")
-        full_df = df[weeks_per_month >= 4]
-        irr_df, fc = fit_its(full_df)
+        irr_df, fc = fit_its(df[weeks_per_month >= 4])
         fx = df["x"].max() + 2
         fig.add_trace(go.Scatter(x=[fx], y=[fc["median"]], mode="markers",
             marker=dict(symbol="diamond", size=10, color="#4A90D9"),
             name="Forecast", error_y=dict(type="data", symmetric=False,
                 array=[fc["hi"] - fc["median"]], arrayminus=[fc["median"] - fc["lo"]])))
+        return irr_df
     except Exception:
-        irr_df = pd.DataFrame()
+        return pd.DataFrame()
 
-    # IRR plot
-    irr_fig = go.Figure()
+def _build_irr_chart(irr_df):
+    fig = go.Figure()
     if not irr_df.empty:
-        irr_fig.add_trace(go.Scatter(
+        fig.add_trace(go.Scatter(
             x=irr_df["month"], y=irr_df["irr"], mode="markers+lines",
             marker=dict(size=8, color="#50B86C"),
             text=[f"${r:.0f}/pt" for r in irr_df["rate"]],
@@ -240,11 +221,29 @@ def update_usage(_):
             error_y=dict(type="data", symmetric=False,
                 array=(irr_df["hi"] - irr_df["irr"]).tolist(),
                 arrayminus=(irr_df["irr"] - irr_df["lo"]).tolist())))
-        irr_fig.update_layout(title="IRR vs Previous Rate Over Time",
+        fig.update_layout(title="IRR vs Previous Rate Over Time",
             margin=dict(t=40, b=30),
             xaxis_title="Month", yaxis_title="Incidence Rate Ratio")
+    return fig
 
-    return snap, fig, irr_fig
+@callback(
+    Output("snapshot", "children"),
+    Output("usage-plot", "figure"),
+    Output("irr-plot", "figure"),
+    Input("snapshot", "id"))
+def update_usage(_):
+    budget, spent, overflow = load_snapshot()
+    snap = [dbc.Col(dbc.Card(dbc.CardBody([
+        html.H6(label, className="card-subtitle text-muted"),
+        html.H3(f"{val} pts")]), className="shadow-sm"), md=4)
+        for label, val in [("Monthly Budget", budget), ("Spent This Month", spent), ("Overflowed This Month", overflow)]]
+    df = load_weekly()
+    if df.empty:
+        empty = go.Figure()
+        return snap, empty, empty
+    fig = _build_usage_chart(df)
+    irr_df = _add_forecast(fig, df)
+    return snap, fig, _build_irr_chart(irr_df)
 
 @callback(Output("leaderboard-plot", "figure"), Input("leaderboard-plot", "id"))
 def update_leaderboard(_):
@@ -282,7 +281,6 @@ def update_stream(_):
         return go.Figure().update_layout(
             title="Topic Evolution (no cluster data yet)"), None
     fig = go.Figure()
-    import plotly.express as px
     summaries = df["summary"].unique()
     colors = px.colors.qualitative.Dark24 + px.colors.qualitative.Light24
     for i, summary in enumerate(summaries):

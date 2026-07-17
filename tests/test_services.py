@@ -30,14 +30,10 @@ def _set_budget(conn, points=100, rate=5.0):
 
 class GiveResult:
     """Wrapper for give_kudos return row. None row means silent no-op (duplicate message_ts)."""
-    def __init__(self, row, giver_id=None, recipient_id=None):
-        if row is None:
-            self.error, self.rate, self.redeemed_ids, self.notify_budget = None, 0, [], False
-            self._noop = True
-        else:
-            self.error, self.rate, self.redeemed_ids, self.notify_budget = row
-            self._noop = False
-        self._giver, self._recipient = giver_id, recipient_id
+    def __init__(self, row, giver=None, recipient=None):
+        self._noop = row is None
+        self.error, self.rate, self.redeemed_ids, self.notify_budget = row or (None, 0, [], False)
+        self._giver, self._recipient = giver, recipient
 
     @property
     def success(self):
@@ -65,11 +61,6 @@ def _give(conn, giver, recipient, ts, text=None, backdate_days=0):
             "UPDATE kudos SET created_at = created_at - %s * INTERVAL '1 day' WHERE message_ts = %s",
             (backdate_days, ts))
     return GiveResult(row, giver, recipient)
-
-
-# ============================================================
-# §3.1 — Giving kudos: validation rules
-# ============================================================
 
 
 def test_success(conn):
@@ -125,11 +116,6 @@ def test_deleted_kudos_does_not_block_new_kudos(conn):
     conn.execute("SELECT * FROM delete_kudos('C1', '1.001')")
     r = _give(conn, "U1", "U2", "1.002")
     assert r.success is True
-
-
-# ============================================================
-# §3.2 — Auto-redemption: received >= given
-# ============================================================
 
 
 def test_redeems_when_received_ge_given(conn):
@@ -213,11 +199,6 @@ def test_recipient_redeems_via_new_received_kudos(conn):
     assert redeemed is True
 
 
-# ============================================================
-# §3.4 — Weekly reminder query
-# ============================================================
-
-
 def test_weekly_reminder_query_excludes_recent_givers(conn):
     """Users who gave kudos this week should not appear in the reminder query."""
     _give(conn, "U1", "U2", "1.001")
@@ -251,16 +232,6 @@ def test_weekly_reminder_ignores_deleted_kudos(conn):
     assert "U1" not in gave
 
 
-# ============================================================
-# §3.5 — Delete / undo
-# ============================================================
-
-
-# ============================================================
-# §3.6 — Edit flow: delete old, re-give
-# ============================================================
-
-
 def test_edit_from_vague_to_specific(conn):
     """Deleting a vague kudos and re-giving with specific text should succeed."""
     _set_budget(conn, points=100, rate=5.0)
@@ -275,11 +246,6 @@ def test_edit_from_vague_to_specific(conn):
     assert r2.success is True
 
 
-# ============================================================
-# §3.7 — Redemption scoping
-# ============================================================
-
-
 def test_global_redemption_clears_owed_eagerly(conn):
     """try_redeem redeems all owed users globally, so no stale backlog accumulates."""
     _set_budget(conn, points=100, rate=5.0)
@@ -290,11 +256,6 @@ def test_global_redemption_clears_owed_eagerly(conn):
     # U1→U2: U3 is already redeemed, so only U1/U2 matter
     r2 = _give(conn, "U1", "U2", "1.003")
     assert "U3" not in r2.redeemed_ids
-
-
-# ============================================================
-# §3.5 — Delete / undo
-# ============================================================
 
 
 def test_delete_kudos(conn):

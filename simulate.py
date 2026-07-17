@@ -15,6 +15,7 @@ import psycopg
 from dotenv import load_dotenv
 from datetime import date
 from dateutil.relativedelta import relativedelta
+from itertools import groupby
 from sizecheck import sizecheck
 
 from cron.backfill import main as backfill
@@ -101,14 +102,17 @@ def write_db(users, budgets, records, covariates, now):
                 conn.execute(
                     "INSERT INTO covariates (label, week, value) VALUES (%s, %s, %s)",
                     (label, week_str, float(val)))
-        # Insert kudos in chronological order, redeeming after each one
-        for i, (giver, recipient, text, kudos_at) in sorted(enumerate(records), key=lambda r: r[1][3]):
-            conn.execute(
-                "INSERT INTO kudos (giver_id, recipient_id, channel_id, message_ts, message_text, "
-                "created_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s)",
-                (giver, recipient, "sim", f"{i}", text, kudos_at))
-            conn.execute("SELECT * FROM try_redeem(%s)", (kudos_at,))
+        # Insert kudos in chronological order, redeeming monthly
+        sorted_records = sorted(enumerate(records), key=lambda r: r[1][3])
+        for _, month_batch in groupby(sorted_records, key=lambda r: r[1][3].replace(day=1)):
+            batch = list(month_batch)
+            with conn.cursor() as cur:
+                cur.executemany(
+                    "INSERT INTO kudos (giver_id, recipient_id, channel_id, message_ts, message_text, created_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    [(giver, recipient, "sim", f"{i}", text, kudos_at)
+                     for i, (giver, recipient, text, kudos_at) in batch])
+            conn.execute("SELECT * FROM try_redeem(%s)", (batch[-1][1][3],))
 
 @sizecheck
 def choose_texts(counts_M4, texts_N, topics_N, weights_MT, rng):

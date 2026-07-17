@@ -13,7 +13,8 @@ CREATE TABLE kudos (
     embedding vector(128),
     giver_overflow BOOLEAN NOT NULL DEFAULT FALSE,
     recipient_overflow BOOLEAN NOT NULL DEFAULT FALSE,
-    CHECK(giver_id <> recipient_id)
+    CHECK(giver_id <> recipient_id),
+    CHECK(redeemed_at IS NULL OR NOT recipient_overflow)
 );
 
 CREATE TABLE users (
