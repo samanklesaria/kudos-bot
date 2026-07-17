@@ -10,10 +10,12 @@ FROM (SELECT giver_id,
 -- Applicable budget as of a given date (defaults to today).
 CREATE FUNCTION effective_budget(p_as_of DATE DEFAULT CURRENT_DATE)
 RETURNS TABLE(conversion_rate NUMERIC, point_budget INTEGER) LANGUAGE SQL STABLE AS $$
-    SELECT b.conversion_rate, b.point_budget
+    (SELECT b.conversion_rate, b.point_budget
     FROM budgets b
     WHERE b.month_date <= p_as_of
-    ORDER BY b.month_date DESC
+    ORDER BY b.month_date DESC)
+    UNION ALL
+    (SELECT 1, 0)
     LIMIT 1;
 $$;
 
@@ -133,8 +135,7 @@ BEGIN
         b.conversion_rate,
         r.redeemed_user_ids,
         r.notify_budget_exhausted
-    FROM try_redeem() r
-    LEFT JOIN effective_budget() b ON TRUE;
+    FROM try_redeem() r, effective_budget() b;
 END;
 $fn$ LANGUAGE plpgsql;
 
