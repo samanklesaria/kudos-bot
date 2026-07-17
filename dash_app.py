@@ -43,11 +43,11 @@ def load_snapshot():
         "SELECT point_budget FROM effective_budget()")
     spent = scalar(
         "SELECT COUNT(*)::int FROM kudos "
-        "WHERE redeemed_at IS NOT NULL AND deleted_at IS NULL "
+        "WHERE redeemed_at IS NOT NULL "
         "AND redeemed_at >= date_trunc('month', NOW())")
     overflow = scalar(
         "SELECT COUNT(*)::int FROM kudos "
-        "WHERE (giver_overflow OR recipient_overflow) AND deleted_at IS NULL "
+        "WHERE (giver_overflow OR recipient_overflow) "
         "AND created_at >= date_trunc('month', NOW())")
     return budget or 0, spent, overflow
 
@@ -116,7 +116,7 @@ def fit_its(df):
 
 load_figure_template("flatly")
 
-app = Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
+app = Dash(__name__, external_stylesheets=[dbc.themes.FLATLY], title="Kudos Dashboard")
 server = app.server
 _scroll = {"overflowY": "auto", "height": "calc(100vh - 120px)"}
 _grid_opts = {"pagination": True, "paginationPageSize": 20,

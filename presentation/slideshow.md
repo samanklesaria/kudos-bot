@@ -80,7 +80,7 @@ graph LR
     A --> Reply["Post reply"]
 ```
 
-Edits delete the old point and re-evaluate from scratch. Deletions remove the point; if already redeemed, accounting is warned.
+Edits delete the old point and re-evaluate from scratch. Deletions remove the point.
 
 # Scheduled Jobs
 

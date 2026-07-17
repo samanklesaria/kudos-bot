@@ -9,7 +9,7 @@ CREATE TABLE kudos (
     message_text TEXT,
     redeemed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deleted_at TIMESTAMPTZ,
+    redeems INTEGER REFERENCES kudos(id) ON DELETE SET NULL,
     embedding vector(128),
     giver_overflow BOOLEAN NOT NULL DEFAULT FALSE,
     recipient_overflow BOOLEAN NOT NULL DEFAULT FALSE,
@@ -36,7 +36,7 @@ CREATE TABLE clusters (
 
 CREATE TABLE cluster_members (
     cluster_id INTEGER NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
-    kudos_id INTEGER NOT NULL REFERENCES kudos(id),
+    kudos_id INTEGER NOT NULL REFERENCES kudos(id) ON DELETE CASCADE,
     PRIMARY KEY (cluster_id, kudos_id)
 );
 
@@ -48,9 +48,9 @@ CREATE TABLE covariates (
 );
 
 CREATE INDEX idx_kudos_recipient ON kudos(recipient_id);
-CREATE INDEX idx_kudos_giver_day ON kudos(giver_id, created_at) WHERE deleted_at IS NULL;
-CREATE INDEX idx_kudos_giver_recipient_month ON kudos(giver_id, recipient_id, created_at) WHERE deleted_at IS NULL;
-CREATE UNIQUE INDEX idx_kudos_channel_ts_active ON kudos(channel_id, message_ts) WHERE deleted_at IS NULL;
-CREATE INDEX idx_kudos_redeemed ON kudos(redeemed_at) WHERE deleted_at IS NULL AND redeemed_at IS NOT NULL;
+CREATE INDEX idx_kudos_giver_day ON kudos(giver_id, created_at);
+CREATE INDEX idx_kudos_giver_recipient_month ON kudos(giver_id, recipient_id, created_at);
+CREATE UNIQUE INDEX idx_kudos_channel_ts ON kudos(channel_id, message_ts);
+CREATE INDEX idx_kudos_redeemed ON kudos(redeemed_at) WHERE redeemed_at IS NOT NULL;
 CREATE INDEX idx_kudos_unredeemed_recipient ON kudos(recipient_id, created_at)
-    WHERE redeemed_at IS NULL AND deleted_at IS NULL AND NOT recipient_overflow;
+    WHERE redeemed_at IS NULL AND NOT recipient_overflow;

@@ -12,7 +12,7 @@ def main():
         gave_this_week = {
             row[0] for row in conn.execute(
                 "SELECT DISTINCT giver_id FROM kudos "
-                "WHERE deleted_at IS NULL AND created_at >= date_trunc('week', NOW())"
+                "WHERE created_at >= date_trunc('week', NOW())"
             ).fetchall()}
     cursor = None
     while True:

@@ -113,7 +113,7 @@ def test_duplicate_message_ts_is_noop(conn):
 
 def test_deleted_kudos_does_not_block_new_kudos(conn):
     _give(conn, "U1", "U2", "1.001", backdate_days=2)
-    conn.execute("SELECT * FROM delete_kudos('C1', '1.001')")
+    conn.execute("CALL delete_kudos('C1', '1.001')")
     r = _give(conn, "U1", "U2", "1.002")
     assert r.success is True
 
@@ -204,7 +204,7 @@ def test_weekly_reminder_query_excludes_recent_givers(conn):
     _give(conn, "U1", "U2", "1.001")
     gave = {row[0] for row in conn.execute(
         "SELECT DISTINCT giver_id FROM kudos "
-        "WHERE deleted_at IS NULL AND created_at >= date_trunc('week', NOW())"
+        "WHERE created_at >= date_trunc('week', NOW())"
     ).fetchall()}
     assert "U1" in gave
 
@@ -217,19 +217,15 @@ def test_weekly_reminder_query_includes_inactive_givers(conn):
         "WHERE message_ts = '1.001'")
     gave = {row[0] for row in conn.execute(
         "SELECT DISTINCT giver_id FROM kudos "
-        "WHERE deleted_at IS NULL AND created_at >= date_trunc('week', NOW())"
+        "WHERE created_at >= date_trunc('week', NOW())"
     ).fetchall()}
     assert "U1" not in gave
 
 def test_weekly_reminder_ignores_deleted_kudos(conn):
     """Deleted kudos should not count as having given this week."""
     _give(conn, "U1", "U2", "1.001")
-    conn.execute("SELECT * FROM delete_kudos('C1', '1.001')")
-    gave = {row[0] for row in conn.execute(
-        "SELECT DISTINCT giver_id FROM kudos "
-        "WHERE deleted_at IS NULL AND created_at >= date_trunc('week', NOW())"
-    ).fetchall()}
-    assert "U1" not in gave
+    conn.execute("CALL delete_kudos('C1', '1.001')")
+    assert conn.execute("SELECT 1 FROM kudos WHERE message_ts = '1.001'").fetchone() is None
 
 
 def test_edit_from_vague_to_specific(conn):
@@ -238,10 +234,8 @@ def test_edit_from_vague_to_specific(conn):
     r1 = _give(conn, "U1", "U2", "1.001", text="good job")
     assert r1.success is True  # DB doesn't enforce content; LLM gate is in app.py
     # Simulate edit: delete old, re-give with new text
-    conn.execute("SELECT * FROM delete_kudos('C1', '1.001')")
-    deleted = conn.execute(
-        "SELECT deleted_at IS NOT NULL FROM kudos WHERE message_ts = '1.001'").fetchone()[0]
-    assert deleted is True
+    conn.execute("CALL delete_kudos('C1', '1.001')")
+    assert conn.execute("SELECT 1 FROM kudos WHERE message_ts = '1.001'").fetchone() is None
     r2 = _give(conn, "U1", "U2", "1.002", text="great job leading the incident retro")
     assert r2.success is True
 
@@ -260,9 +254,19 @@ def test_global_redemption_clears_owed_eagerly(conn):
 
 def test_delete_kudos(conn):
     _give(conn, "U1", "U2", "1.001")
-    row = conn.execute("SELECT * FROM delete_kudos('C1', '1.001')").fetchone()
-    assert row is not None
-    assert row[0] is False  # was_redeemed
-    deleted = conn.execute(
-        "SELECT deleted_at IS NOT NULL FROM kudos WHERE message_ts = '1.001'").fetchone()[0]
-    assert deleted is True
+    conn.execute("CALL delete_kudos('C1', '1.001')")
+    assert conn.execute("SELECT 1 FROM kudos WHERE message_ts = '1.001'").fetchone() is None
+
+def test_delete_unredeems(conn):
+    """Deleting a kudos that redeemed another should un-redeem the target."""
+    _set_budget(conn, points=100, rate=5.0)
+    _give(conn, "U2", "U1", "1.001", backdate_days=2)
+    _give(conn, "U1", "U3", "1.002")  # redeems U1's received kudos
+    redeemed = conn.execute(
+        "SELECT redeemed_at IS NOT NULL FROM kudos WHERE message_ts = '1.001'").fetchone()[0]
+    assert redeemed is True
+    # Delete the giving kudos that caused the redemption
+    conn.execute("CALL delete_kudos('C1', '1.002')")
+    redeemed = conn.execute(
+        "SELECT redeemed_at IS NOT NULL FROM kudos WHERE message_ts = '1.001'").fetchone()[0]
+    assert redeemed is False

@@ -52,7 +52,7 @@ simulate.py             Synthetic data generator for demo/testing
 |---|---|
 | `app_mention` | Give kudos: validate content (LLM), enforce limits, insert, attempt giver+recipient redemption |
 | `message_changed` | Re-evaluate edited kudos (delete old, re-give) |
-| `message_deleted` | Soft-delete kudos; warn accounting if already redeemed |
+| `message_deleted` | Delete kudos, undoing any redemptions it implied |
 | `member_joined_channel` | Onboarding message in public channels; leave private channels |
 
 ### Database Functions

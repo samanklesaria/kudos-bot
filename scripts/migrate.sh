@@ -10,10 +10,10 @@ BEGIN
     END LOOP;
     FOR r IN SELECT oid::regprocedure::text AS sig FROM pg_proc
              WHERE pronamespace = 'public'::regnamespace
-               AND prokind = 'f'
+               AND prokind IN ('f', 'p')
                AND NOT EXISTS (SELECT 1 FROM pg_depend d
                    WHERE d.objid = oid AND d.deptype = 'e') LOOP
-        EXECUTE 'DROP FUNCTION IF EXISTS ' || r.sig || ' CASCADE';
+        EXECUTE 'DROP ROUTINE IF EXISTS ' || r.sig || ' CASCADE';
     END LOOP;
 END $$;
 SQL
@@ -21,6 +21,6 @@ SQL
 pg-schema-diff apply \
     --from-dsn "$DATABASE_URL" \
     --to-dir schema \
-    --allow-hazards HAS_UNTRACKABLE_DEPENDENCIES,INDEX_BUILD \
+    --allow-hazards HAS_UNTRACKABLE_DEPENDENCIES,INDEX_BUILD,INDEX_DROPPED,DELETES_DATA \
     --skip-confirm-prompt \
     --disable-plan-validation

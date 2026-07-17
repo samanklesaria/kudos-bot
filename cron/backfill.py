@@ -61,7 +61,7 @@ def backfill_clusters(conn):
     rows = conn.execute(
         "SELECT id, embedding, message_text, to_char(created_at, 'YYYY-MM') AS month "
         "FROM kudos "
-        "WHERE deleted_at IS NULL AND embedding IS NOT NULL").fetchall()
+        "WHERE embedding IS NOT NULL").fetchall()
     if len(rows) < 2:
         print(f"Not enough kudos to cluster ({len(rows)}).")
         return

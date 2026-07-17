@@ -80,7 +80,7 @@ def _handle_kudos(giver_id, channel_id, message_ts, text, bot_user_id, *, delete
         if delete_first:
             _delete_kudos(conn, channel_id, message_ts)
         row = _give_kudos_db(conn, giver_id, recipient, channel_id, message_ts, text, giver_name, recipient_name)
-    if row is None:
+    if row is None: # if the entry already exists
         return
     error, rate, redeemed_ids, notify_budget = row
     if error:
@@ -118,14 +118,7 @@ def handle_message_changed(event, context):
         text, context.bot_user_id, delete_first=True)
 
 def _delete_kudos(conn, channel_id, message_ts):
-    row = conn.execute(
-        "SELECT * FROM delete_kudos(%s, %s)", (channel_id, message_ts)).fetchone()
-    if row and row[0] and ACCOUNTING_CHANNEL:
-        app.client.chat_postMessage(
-            channel=ACCOUNTING_CHANNEL,
-            text=(
-                f"Warning: Kudos deletion for <@{row[1]}> involved "
-                f"an already-redeemed point. This may require manual review."))
+    conn.execute("CALL delete_kudos(%s, %s)", (channel_id, message_ts))
 
 @app.event({"type": "message", "subtype": "message_deleted"})
 def handle_message_deleted(event):
