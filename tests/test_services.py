@@ -132,11 +132,15 @@ def test_no_redeem_when_received_lt_given(conn):
     assert r.success is True
     assert r.redeemed is False
 
-def test_no_redeem_without_budget(conn):
+def test_overflow_without_budget(conn):
+    """Without a budget, kudos still redeem but are all marked as overflow."""
     _give(conn, "U2", "U1", "1.001", backdate_days=2)
     r = _give(conn, "U1", "U3", "1.002")
     assert r.success is True
-    assert r.redeemed is False
+    assert r.redeemed is True
+    overflow = conn.execute(
+        "SELECT overflow FROM kudos WHERE message_ts = '1.001'").fetchone()[0]
+    assert overflow is True
 
 def test_redeems_multiple_times_with_surplus(conn):
     """If received > given, each subsequent give also redeems."""
@@ -162,15 +166,22 @@ def test_budget_exhaustion_notification(conn):
     r = _give(conn, "U1", "U3", "1.002")
     assert r.redeemed is True
     assert r.notify_budget is True
+    overflow = conn.execute(
+        "SELECT overflow FROM kudos WHERE message_ts = '1.001'").fetchone()[0]
+    assert overflow is False
 
 def test_budget_exhaustion_does_not_re_notify(conn):
-    """Second redemption attempt after budget is full should not re-notify."""
+    """Second redemption after budget is full should overflow and not re-notify."""
     _set_budget(conn, points=1, rate=5.0)
     _give(conn, "U2", "U1", "1.001", backdate_days=2)
     _give(conn, "U1", "U3", "1.002", backdate_days=1)  # fills budget
     _give(conn, "U4", "U5", "1.003", backdate_days=1)
     r = _give(conn, "U5", "U6", "1.004")
+    assert r.redeemed is True
     assert r.notify_budget is False
+    overflow = conn.execute(
+        "SELECT overflow FROM kudos WHERE message_ts = '1.003'").fetchone()[0]
+    assert overflow is True
 
 
 

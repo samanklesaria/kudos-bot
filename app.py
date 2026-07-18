@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 ACCOUNTING_CHANNEL = os.environ.get("KUDOS_ACCOUNTING_CHANNEL")
 pool = ConnectionPool(os.environ["DATABASE_URL"])
 app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
+_name_executor = ThreadPoolExecutor(max_workers=2)
 
 USER_MENTION_RE = re.compile(r"<@(U[A-Z0-9]+)>")
 
@@ -39,8 +40,12 @@ def is_concrete_praise(text):
         return True
 
 def _get_display_name(user_id):
-    info = app.client.users_info(user=user_id)
-    return info["user"]["profile"].get("display_name") or info["user"]["real_name"]
+    try:
+        info = app.client.users_info(user=user_id)
+        return info["user"]["profile"].get("display_name") or info["user"]["real_name"]
+    except Exception:
+        logger.warning("Failed to fetch display name for %s", user_id)
+        return user_id
 
 def _give_kudos_db(conn, giver_id, recipient_id, channel_id, message_ts, text, giver_name, recipient_name):
     for uid, name in [(giver_id, giver_name), (recipient_id, recipient_name)]:
@@ -74,8 +79,7 @@ def _handle_kudos(giver_id, channel_id, message_ts, text, bot_user_id, *, delete
                  "Example: `@kudos @someone Great job leading the incident retro today!`",
             thread_ts=message_ts)
         return
-    with ThreadPoolExecutor(max_workers=2) as ex:
-        giver_name, recipient_name = ex.map(_get_display_name, [giver_id, recipient])
+    giver_name, recipient_name = _name_executor.map(_get_display_name, [giver_id, recipient])
     with pool.connection() as conn:
         if delete_first:
             _delete_kudos(conn, channel_id, message_ts)

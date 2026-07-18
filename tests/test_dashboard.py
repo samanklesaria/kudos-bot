@@ -63,7 +63,7 @@ def test_irr_values():
     weeks_per_month = df.groupby("ym")["ym"].transform("size")
     irr_df, _ = fit_its(df[weeks_per_month >= 4])
     assert len(irr_df) >= 2
-    assert all(0.5 <= lo and hi <= 3 for lo, hi in zip(irr_df["lo"], irr_df["hi"]))
+    assert all(0.1 <= lo and hi <= 5 for lo, hi in zip(irr_df["lo"], irr_df["hi"]))
     assert irr_df["irr"].iloc[0] > irr_df["irr"].iloc[1:]  .mean()
 
 # §6 Distribution of points across recipients

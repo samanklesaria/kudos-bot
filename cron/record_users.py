@@ -10,22 +10,15 @@ load_dotenv()
 
 def main():
     client = WebClient(token=os.environ["SLACK_BOT_TOKEN"])
-    channels = client.users_conversations(types="public_channel")["channels"]
     # ── num_users: unique members across all bot channels ─────────────────
     users = set()
-    for ch in channels:
-        cursor = None
-        while True:
-            resp = client.conversations_members(channel=ch["id"],
-                **({"cursor": cursor} if cursor else {}))
-            users.update(resp["members"])
-            cursor = resp.get("response_metadata", {}).get("next_cursor")
-            if not cursor:
-                break
+    for ch in client.users_conversations(types="public_channel")["channels"]:
+        users.update(client.conversations_members(channel=ch["id"])["members"])
     # ── workday_frac: non-holiday weekdays in current ISO week / 5 ───────
     today = date.today()
     monday = today - timedelta(days=today.weekday())
-    us_holidays = holidays.US(years=today.year)
+    friday = monday + timedelta(days=4)
+    us_holidays = holidays.US(years=sorted({monday.year, friday.year}))
     workdays = sum(1 for d in range(5)
         if (day := monday + timedelta(days=d)) not in us_holidays)
     workday_frac = workdays / 5.0

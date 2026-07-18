@@ -17,12 +17,13 @@ FROM kudos k, effective_budget() b
 WHERE k.redeemed_at >= date_trunc('month', CURRENT_DATE) AND NOT k.overflow
 GROUP BY k.recipient_id, b.conversion_rate;
 
--- How many points have been redeemed in a given month.
+-- How many points have been redeemed in a given month (excluding overflow).
 CREATE FUNCTION redeemed_this_month(p_month DATE DEFAULT date_trunc('month', CURRENT_DATE)::date)
 RETURNS INTEGER LANGUAGE SQL STABLE AS $fn$
     SELECT COUNT(*)::int FROM kudos
     WHERE redeemed_at >= p_month
-      AND redeemed_at < p_month + INTERVAL '1 month';
+      AND redeemed_at < p_month + INTERVAL '1 month'
+      AND NOT overflow;
 $fn$;
 
 -- Validates that a giver can give kudos right now. Returns NULL on success, error message on failure.
@@ -43,14 +44,17 @@ $fn$;
 
 CREATE VIEW to_redeem AS
 WITH gives AS (
-    SELECT id, ROW_NUMBER() OVER (ORDER BY created_at) AS rn
+    SELECT id, giver_id,
+           ROW_NUMBER() OVER (PARTITION BY giver_id ORDER BY created_at, id) AS rn
     FROM kudos WHERE redeems IS NULL),
 receives AS (
-    SELECT id, ROW_NUMBER() OVER (ORDER BY created_at) AS rn
+    SELECT id, recipient_id,
+           ROW_NUMBER() OVER (PARTITION BY recipient_id ORDER BY created_at, id) AS rn
     FROM kudos WHERE redeemed_at IS NULL AND NOT overflow)
-SELECT gives.id AS give_id, receives.id as receive_id, gives.rn as rn
-FROM gives JOIN receives on gives.rn = receives.rn
-ORDER BY gives.rn;
+SELECT gives.id AS give_id, receives.id AS receive_id,
+       ROW_NUMBER() OVER (ORDER BY gives.id) AS rn
+FROM gives JOIN receives
+  ON gives.giver_id = receives.recipient_id AND gives.rn = receives.rn;
 
 -- How many points remain in this month's budget?
 CREATE FUNCTION remaining_budget(p_as_of DATE DEFAULT CURRENT_DATE)
@@ -90,6 +94,7 @@ END;
 $fn$ LANGUAGE plpgsql;
 
 -- Main entry point: validate, insert, and attempt redemption.
+-- Acquires the advisory lock before check_kudos_limits to prevent race conditions.
 CREATE FUNCTION give_kudos(
     p_giver_id VARCHAR,
     p_recipient_id VARCHAR,
@@ -100,6 +105,7 @@ CREATE FUNCTION give_kudos(
                 notify_budget_exhausted BOOLEAN) AS $fn$
 DECLARE v_error VARCHAR(128);
 BEGIN
+    PERFORM pg_advisory_xact_lock(hashtext('try_redeem'));
     v_error := check_kudos_limits(p_giver_id, p_recipient_id);
     IF v_error IS NOT NULL THEN
         RETURN QUERY SELECT v_error, NULL::NUMERIC, '{}'::VARCHAR[], FALSE;
@@ -119,20 +125,22 @@ END;
 $fn$ LANGUAGE plpgsql;
 
 -- Weekly acquired vs redeemed with effective budget for each week.
+-- Uses the calendar month of the week's midpoint (Thursday) to avoid split weeks.
 CREATE VIEW weekly_kudos AS
 SELECT yw, ym, acquired, redeemed, b.point_budget, b.conversion_rate FROM (
     SELECT to_char(k.created_at, 'IYYY-IW') AS yw,
-           to_char(k.created_at, 'YYYY-MM') AS ym,
+           to_char(date_trunc('week', min(k.created_at))::date + 3, 'YYYY-MM') AS ym,
            COUNT(*)::int AS acquired,
            COUNT(*) FILTER (WHERE k.redeems IS NOT NULL)::int AS redeemed
     FROM kudos k
-    GROUP BY yw, ym) w
+    GROUP BY yw) w
 JOIN LATERAL effective_budget((w.ym || '-01')::date) b ON TRUE
 ORDER BY yw;
 
--- Points received per person.
+-- Points received per person, exponentially decayed (half-life 30 days).
 CREATE VIEW leaderboard AS
-SELECT u.display_name, COUNT(*)::int AS received
+SELECT u.display_name,
+       SUM(exp(-0.693 * EXTRACT(EPOCH FROM NOW() - k.created_at) / (30 * 86400)))::numeric(10,1) AS received
 FROM kudos k JOIN users u ON u.id = k.recipient_id
 GROUP BY u.id, u.display_name ORDER BY received DESC LIMIT 25;
 
@@ -161,10 +169,14 @@ JOIN users ur ON ur.id = k.recipient_id;
 
 -- Hard-delete a kudos, un-redeeming any kudos it had redeemed.
 CREATE PROCEDURE delete_kudos(p_channel_id VARCHAR, p_message_ts VARCHAR) LANGUAGE plpgsql AS $fn$
+DECLARE v_created_at TIMESTAMPTZ;
 BEGIN
-    UPDATE kudos SET redeemed_at = NULL
+    PERFORM pg_advisory_xact_lock(hashtext('try_redeem'));
+    SELECT created_at INTO v_created_at FROM kudos
+    WHERE channel_id = p_channel_id AND message_ts = p_message_ts LIMIT 1;
+    UPDATE kudos SET redeemed_at = NULL, overflow = FALSE
     WHERE id IN (SELECT redeems FROM kudos WHERE channel_id = p_channel_id AND message_ts = p_message_ts AND redeems IS NOT NULL);
     DELETE FROM kudos WHERE channel_id = p_channel_id AND message_ts = p_message_ts;
-    PERFORM try_redeem();
+    PERFORM try_redeem(COALESCE(v_created_at, NOW()));
 END;
 $fn$;

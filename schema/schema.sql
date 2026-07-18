@@ -50,3 +50,5 @@ CREATE INDEX idx_kudos_giver_day ON kudos(giver_id, created_at);
 CREATE INDEX idx_kudos_giver_recipient_month ON kudos(giver_id, recipient_id, created_at);
 CREATE UNIQUE INDEX idx_kudos_channel_ts ON kudos(channel_id, message_ts);
 CREATE INDEX idx_kudos_redeemed ON kudos(redeemed_at) WHERE redeemed_at IS NOT NULL;
+CREATE INDEX idx_kudos_unredeemed ON kudos(recipient_id, created_at, id) WHERE redeemed_at IS NULL AND NOT overflow;
+CREATE INDEX idx_kudos_unlinked ON kudos(giver_id, created_at, id) WHERE redeems IS NULL;

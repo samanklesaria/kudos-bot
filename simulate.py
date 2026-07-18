@@ -85,7 +85,7 @@ def clear_db():
     with psycopg.connect(DATABASE_URL) as conn:
         conn.execute("DELETE FROM budgets")
 
-def write_db(users, budgets, records, covariates, now):
+def write_db(users, budgets, records, covariates, dates):
     clear_db()
     with psycopg.connect(DATABASE_URL) as conn:
         for display_name in users:
@@ -97,8 +97,7 @@ def write_db(users, budgets, records, covariates, now):
                 (cfg["month_date"], cfg["point_budget"], cfg["conversion_rate"]))
         for label, values in covariates.items():
             for w, val in enumerate(values):
-                week_date = week_to_date(now, w)
-                yw = week_date.isocalendar()
+                yw = dates[w].isocalendar()
                 week_str = f"{yw[0]:04d}-{yw[1]:02d}"
                 conn.execute(
                     "INSERT INTO covariates (label, week, value) VALUES (%s, %s, %s)",
@@ -124,18 +123,20 @@ def choose_texts(counts_M4, texts_N, topics_N, weights_MT, rng):
     ix_S = order_N[offsets_T[topics_S] + pos_S]
     return texts_N[ix_S], week_S
 
-def week_to_date(now, week):
-    return now - relativedelta(months=N_MONTHS - 1 - int(week) // 4) + \
-        relativedelta(weeks=int(week) % 4)
+def week_dates(now):
+    """Return W contiguous weekly dates, one per simulation week, spaced 7 days apart."""
+    from datetime import timedelta
+    start = now - relativedelta(months=N_MONTHS - 1)
+    return [start + timedelta(weeks=w) for w in range(N_MONTHS * 4)]
 
-def events(now, users, texts_S, weeks_S, rng):
+def events(dates, users, texts_S, weeks_S, rng):
     weights = rng.pareto(a=1.5, size=len(users))
     weights /= weights.sum()
     for (text, week) in zip(texts_S, weeks_S):
         giver, recipient = rng.choice(users, size=2, replace=False, p=weights)
-        yield (giver, recipient, text, week_to_date(now, week))
+        yield (giver, recipient, text, dates[int(week)])
 
-def main(seed=2):
+def main(seed=3):
     rng = np.random.default_rng(seed)
     texts, targets = load_messages()
     now = date.today().replace(day=1)
@@ -143,11 +144,12 @@ def main(seed=2):
     weights_MT = build_topic_weights(rng)
     counts_M4, mu_M4 = simulate_ITS_counts(rng, covariates)
     budgets = make_budgets(now, mu_M4.sum(axis=1))
+    dates = week_dates(now)
     texts_S, weeks_S = choose_texts(counts_M4, texts, targets, weights_MT, rng)
     with open(USERNAMES_FILE) as f:
         users = [line.strip() for line in f if line.strip()]
-    records = list(events(now, users, texts_S, weeks_S, rng))
-    write_db(users, budgets, records, covariates, now)
+    records = list(events(dates, users, texts_S, weeks_S, rng))
+    write_db(users, budgets, records, covariates, dates)
     backfill()
 
 if __name__ == "__main__":

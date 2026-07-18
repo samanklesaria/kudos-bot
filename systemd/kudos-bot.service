@@ -1,0 +1,14 @@
+[Unit]
+Description=Kudos Slack Bot
+After=postgresql.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/kudos
+EnvironmentFile=/opt/kudos/.env
+ExecStart=/opt/kudos/.venv/bin/python app.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

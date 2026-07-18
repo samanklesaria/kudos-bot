@@ -94,7 +94,7 @@ Edits hard-delete the old kudos (un-redeeming linked points) and re-evaluate fro
 # Treatment Effect Estimation
 
 - Pairwise IRR between consecutive conversion-rate periods
-- Redeemed counts $Y_j$, exposures $E_j = \sum (\text{workday\_frac} \times \text{num\_users})$
+- Kudos counts $Y_j$, exposures $E_j = \sum (\text{workday\_frac} \times \text{num\_users})$
 
 $$\text{IRR} = \frac{Y_2 / E_2}{Y_1 / E_1} \qquad \text{CI via score test inversion (Gu et al.)}$$
 
@@ -132,13 +132,13 @@ Live demo: Poisson model diagnostics (quantile residuals, overdispersion, autoco
 
 # Lines of Code
 
-842 lines total — bot, dashboard, cron jobs, schema, and all business logic.
+845 lines total — bot, dashboard, cron jobs, schema, and all business logic.
 
 | Component | Lines |
 |-----------|------:|
-| Python    |   634 |
-| SQL       |   208 |
-| **Total** | **842** |
+| Python    |   650 |
+| SQL       |   195 |
+| **Total** | **845** |
 
 # AI in Development
 
@@ -163,4 +163,4 @@ The bot uses an LLM to gate every kudos for substantive content, and another to 
 - One Slack message to give kudos — no forms, no approvals
 - Anti-abuse enforced structurally, not by policy
 - Causal measurement of budget impact on activity
-- 842 lines of code, 33 tests, fully automated
+- 845 lines of code, 33 tests, fully automated

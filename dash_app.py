@@ -7,9 +7,8 @@ Panels:
   4. Recipient point distribution
   5. Topic cluster streamgraph with drill-down table
 """
-import os, json
+import os, json, logging
 import pandas as pd
-import psycopg
 from psycopg_pool import ConnectionPool
 import plotly.graph_objects as go
 import plotly.express as px
@@ -22,14 +21,16 @@ from dotenv import load_dotenv
 from pgvector.psycopg import register_vector
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 DATABASE_URL = os.environ["DATABASE_URL"]
 pool = ConnectionPool(DATABASE_URL, configure=register_vector)
 
 def query(sql, params=None):
     with pool.connection() as conn:
-        conn.row_factory = psycopg.rows.dict_row
-        rows = conn.execute(sql, params).fetchall()
-        return pd.DataFrame(rows) if rows else pd.DataFrame()
+        cur = conn.execute(sql, params)
+        cols = [d.name for d in cur.description]
+        rows = cur.fetchall()
+        return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame()
 
 def scalar(sql):
     with pool.connection() as conn:
@@ -83,18 +84,25 @@ def load_covariates():
 def _exposure_by_week(df):
     """Compute per-week exposure (workday_frac * num_users) from covariates, keyed by yw."""
     covs = load_covariates()
+    if covs.empty:
+        return pd.Series(dtype=float, index=df.index)
     pivoted = covs.pivot(index="week", columns="label", values="value")
     exposure = (pivoted["workday_frac"] * pivoted["num_users"]).astype(float)
-    return df["yw"].map(exposure)
+    result = df["yw"].map(exposure)
+    if result.isna().any():
+        missing = df.loc[result.isna(), "yw"].unique().tolist()
+        logger.warning("Missing covariates for weeks: %s", missing)
+    return result
 
 def fit_its(df):
     """Pairwise IRR + CI for consecutive conversion rates via Poisson 2-sample comparison."""
     from statsmodels.stats.rates import confint_poisson_2indep
     df = df.copy()
     df["exposure"] = _exposure_by_week(df)
+    df = df.dropna(subset=["exposure"])
     rate_month = df.groupby("conversion_rate")["ym"].first()
     agg = df.groupby("conversion_rate").agg(
-        count=("redeemed", "sum"), exposure=("exposure", "sum")).sort_index()
+        count=("acquired", "sum"), exposure=("exposure", "sum")).sort_index()
     if len(agg) < 2:
         return pd.DataFrame(), None
     rows = []
@@ -171,6 +179,7 @@ app.clientside_callback(
     Input("stream-plot", "clickData"))
 
 def _build_usage_chart(df):
+    df = df.copy()
     df["x"] = range(len(df))
     weekly_budget = df["point_budget"].astype(float) / 4
     fig = go.Figure()
@@ -199,7 +208,7 @@ def _build_usage_chart(df):
             pd.Timestamp(m + "-01").strftime("%b %Y") for m in month_ticks.index]),
         yaxis_title="Points", legend=dict(orientation="h", y=1, yanchor="top",
             bgcolor="rgba(255,255,255,0.7)"))
-    return fig
+    return fig, df
 
 def _add_forecast(fig, df):
     try:
@@ -218,6 +227,7 @@ def _add_forecast(fig, df):
             ticktext=list(tt if tt is not None else []) + [next_month.strftime("%b %Y")]))
         return irr_df
     except Exception:
+        logger.exception("Failed to compute forecast/IRR")
         return pd.DataFrame()
 
 def _build_irr_chart(irr_df):
@@ -251,7 +261,7 @@ def update_usage(_):
     if df.empty:
         empty = go.Figure()
         return snap, empty, empty
-    fig = _build_usage_chart(df)
+    fig, df = _build_usage_chart(df)
     irr_df = _add_forecast(fig, df)
     return snap, fig, _build_irr_chart(irr_df)
 
