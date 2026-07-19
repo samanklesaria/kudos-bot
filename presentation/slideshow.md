@@ -1,28 +1,17 @@
 # Kudos Bot
 
-Peer recognition programs fail when they're hard to use or easy to game. *Kudos Bot* makes giving praise as simple as a Slack message — and makes abuse structurally impossible rather than policy-dependent.
-
-# The Problem
-
-```mermaid
-graph LR
-    A["Forms, portals,<br>manager approval"] -->|"Slack Bot"| B["One Slack message"]
-    C["Reciprocal<br>farming"] -->|"Reciprocity +<br>LLM gate"| D["Must give genuine<br>praise to earn"]
-    E["Unknown effect of<br>budget on activity"] -->|"ITS dashboard"| F["Causal estimation<br>of spend impact"]
-```
-
-# Design Principles
-
 ```mermaid
 graph TD
     A["<b>Simple for the giver</b><br>@kudos @jane Great retro!"] --> B["<b>Hard to game</b><br>Rate limits, public channels,<br>LLM content gate"]
-    A --> C["<b>Budget control</b><br>Monthly cap"]
-    A --> D["<b>Measurable</b><br>Causal effect<br>estimation"]
+    A --> C["<b>Reciprocity</b><br>Give to earn"]
+    A --> D["<b>Budget control</b><br>Monthly cap"]
+    A --> E["<b>Measurable</b><br>Causal effect<br>estimation"]
 ```
 
 # Reciprocity: You Earn by Giving
 
-Points convert to dollars only when your given count matches your received count.
+Your Nth give redeems your Nth received kudos — paired 1:1, oldest first.
+Giving kudos is not just altruistic — it's how you unlock your own earnings.
 
 $$\text{owed} = \min(\text{given},\, \text{received}) - \text{redeemed}$$
 
@@ -80,7 +69,7 @@ graph LR
     A --> Reply["Post reply"]
 ```
 
-Edits hard-delete the old kudos (un-redeeming linked points) and re-evaluate from scratch.
+Edits delete the old kudos (un-redeeming linked points) and re-evaluate from scratch.
 
 # Scheduled Jobs
 
@@ -96,7 +85,7 @@ Edits hard-delete the old kudos (un-redeeming linked points) and re-evaluate fro
 - Pairwise IRR between consecutive conversion-rate periods
 - Kudos counts $Y_j$, exposures $E_j = \sum (\text{workday\_frac} \times \text{num\_users})$
 
-$$\text{IRR} = \frac{Y_2 / E_2}{Y_1 / E_1} \qquad \text{CI via score test inversion (Gu et al.)}$$
+$$\text{IRR} = \frac{Y_2 / E_2}{Y_1 / E_1} \qquad \text{CI via score test inversion}$$
 
 - 90% confidence intervals on each IRR
 - Forecast: Poisson prediction scaled by next week's exposure
@@ -142,7 +131,11 @@ Live demo: Poisson model diagnostics (quantile residuals, overdispersion, autoco
 
 # AI in Development
 
-AI was used at every stage: critiquing the initial design, generating synthetic data (usernames, kudos messages, topic distributions), prototyping all code, tests and debugging, learning unfamiliar libraries (Dash), and writing this presentation.
+- Critiquing the initial design
+- Generating synthetic data (usernames, kudos messages, topic distributions)
+- Prototyping all code and documentation (including this presentation)
+- Tests and debugging
+- Code review and critique
 
 # AI in the Product
 
@@ -158,9 +151,25 @@ graph LR
 
 The bot uses an LLM to gate every kudos for substantive content, and another to summarize topic clusters for the dashboard.
 
+# Deployment
+
+Single Docker container runs `systemd` as PID 1 with everything inside.
+
+| Unit | Description |
+|------|-------------|
+| `postgresql.service` | Postgres with pgvector |
+| `kudos-bot.service` | Slack bot via Socket Mode |
+| `kudos-dashboard.service` | Gunicorn on port 8050 |
+| `kudos-backfill.timer` | Weekly embedding + clustering |
+| `kudos-weekly-reminder.timer` | Weekly DM reminders |
+| `kudos-accounting.timer` | Monthly redemption report |
+
+Schema migrations via `pg-schema-diff` — declarative SQL, no migration files.
+
 # Questions?
 
 - One Slack message to give kudos — no forms, no approvals
 - Anti-abuse enforced structurally, not by policy
+- Reciprocity to encourage participation
 - Causal measurement of budget impact on activity
-- 845 lines of code, 33 tests, fully automated
+- 845 lines of code, 33 tests including browser automations
