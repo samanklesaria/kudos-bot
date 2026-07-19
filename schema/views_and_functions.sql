@@ -66,11 +66,17 @@ END;
 $fn$;
 
 -- Attempts to redeem points. p_as_of overrides the redemption timestamp (for simulation).
+--
+-- Concurrency: all mutations to redemption state (give_kudos, try_redeem, delete_kudos)
+-- share a single advisory lock keyed on hashtext('try_redeem'). The lock is reentrant
+-- within a transaction, so give_kudos → try_redeem and delete_kudos → try_redeem
+-- acquire it twice harmlessly. This serializes all limit checks, inserts, redemptions,
+-- and deletions, preventing races like two concurrent gives bypassing the daily cap.
 CREATE FUNCTION try_redeem(p_as_of TIMESTAMPTZ DEFAULT NOW())
 RETURNS TABLE(redeemed_user_ids VARCHAR[], notify_budget_exhausted BOOLEAN) AS $fn$
 DECLARE v_remaining INTEGER;
 BEGIN
-    PERFORM pg_advisory_xact_lock(hashtext('try_redeem'));
+    PERFORM pg_advisory_xact_lock(hashtext('try_redeem'));  -- reentrant if caller already holds it
     v_remaining := remaining_budget(p_as_of::date);
     RETURN QUERY
     WITH pairs AS (
@@ -94,7 +100,8 @@ END;
 $fn$ LANGUAGE plpgsql;
 
 -- Main entry point: validate, insert, and attempt redemption.
--- Acquires the advisory lock before check_kudos_limits to prevent race conditions.
+-- Acquires the shared advisory lock before check_kudos_limits so that two concurrent
+-- gives from the same user cannot both pass the daily/per-pair cap.
 CREATE FUNCTION give_kudos(
     p_giver_id VARCHAR,
     p_recipient_id VARCHAR,
@@ -168,6 +175,7 @@ JOIN users ug ON ug.id = k.giver_id
 JOIN users ur ON ur.id = k.recipient_id;
 
 -- Hard-delete a kudos, un-redeeming any kudos it had redeemed.
+-- Acquires the shared advisory lock to prevent racing with concurrent give_kudos/try_redeem.
 CREATE PROCEDURE delete_kudos(p_channel_id VARCHAR, p_message_ts VARCHAR) LANGUAGE plpgsql AS $fn$
 BEGIN
     PERFORM pg_advisory_xact_lock(hashtext('try_redeem'));

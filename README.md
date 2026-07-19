@@ -25,7 +25,7 @@ cron/
   weekly_reminder.py    Weekly: DM users who haven't given kudos
   backfill.py           Weekly: embed kudos messages, cluster, LLM-summarize topics
   record_users.py       Weekly: record covariates (num_users, workday_frac, channel_messages)
-  accounting.py         Monthly: report last month's redemptions to accounting channel
+  accounting.py         Monthly: report this month's redemptions to accounting channel
 schema/
   schema.sql            Tables, indexes, CHECK constraints
   views_and_functions.sql  Views and PL/pgSQL functions (give_kudos, try_redeem, etc.)
@@ -36,6 +36,16 @@ tests/
   test_cron.py          Tests for all cron jobs
 simulate.py             Synthetic data generator for demo/testing
 ```
+
+### Give-to-Earn Model
+
+Kudos uses a **give-to-earn** redemption model: you only receive payouts when you recognize others. Specifically, your Nth give redeems your Nth received kudos (paired 1:1, oldest first, per person). If you've received 5 kudos but only given 3, only 3 of your received kudos are redeemed for payout — the other 2 wait until you give more.
+
+This creates a virtuous cycle: giving kudos is not just altruistic, it's how you unlock your own earnings.
+
+### Overflow
+
+Each month has a **point budget** (set by accounting). Redemptions are processed in order. Once the budget is exhausted, subsequent redemptions are marked as **overflow**: `redeemed_at` is still set (to track *when* the overflow happened), but the `overflow` flag is true and no payout is generated. The `remaining_budget()` function excludes overflow rows from its count, so the budget tracks real payouts only.
 
 ### Schema
 

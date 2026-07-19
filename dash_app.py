@@ -242,8 +242,11 @@ def _build_irr_chart(irr_df):
             error_y=dict(type="data", symmetric=False,
                 array=(irr_df["hi"] - irr_df["irr"]).tolist(),
                 arrayminus=(irr_df["irr"] - irr_df["lo"]).tolist())))
-        fig.update_layout(title="IRR vs Previous Rate Over Time",
-            margin=dict(t=40, b=30),
+        fig.update_layout(
+            title="Treatment Effect: How Each Rate Change Affected Kudos Activity<br>"
+                  "<sup>Incidence rate ratio (IRR) vs prior rate, adjusted for team size and holidays. "
+                  "IRR > 1 = more kudos; error bars = 90% CI.</sup>",
+            margin=dict(t=60, b=30),
             xaxis_title="Month", yaxis_title="Incidence Rate Ratio")
     return fig
 
@@ -274,7 +277,9 @@ def update_leaderboard(_):
     fig = go.Figure(go.Bar(
         y=df["display_name"][::-1], x=df["received"][::-1],
         orientation="h", marker_color="#4A90D9"))
-    fig.update_layout(title="Points Received per Person", xaxis_title="Points",
+    fig.update_layout(
+        title="Points Received per Person (half-life 30 days)",
+        xaxis_title="Points",
         height=max(400, len(df) * 22))
     return fig
 

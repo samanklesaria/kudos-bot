@@ -86,7 +86,7 @@ Edits hard-delete the old kudos (un-redeeming linked points) and re-evaluate fro
 
 | Script | Frequency | Purpose |
 |--------|-----------|---------|
-| `accounting.py` | Monthly | Report last month's redemptions to accounting channel |
+| `accounting.py` | Monthly | Report this month's redemptions to accounting channel |
 | `weekly_reminder.py` | Weekly | DM users who haven't given kudos |
 | `backfill.py` | Weekly | Embed kudos, cluster, LLM-summarize topics |
 | `record_users.py` | Weekly | Record exposures for Poisson GLM |
