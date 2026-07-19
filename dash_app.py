@@ -50,7 +50,7 @@ def load_snapshot():
         "SELECT COUNT(*)::int FROM kudos "
         "WHERE overflow "
         "AND redeemed_at >= date_trunc('month', NOW())")
-    return budget or 0, spent, overflow
+    return budget or 0, spent or 0, overflow or 0
 
 def load_weekly():
     return query("SELECT * FROM weekly_kudos")
@@ -107,7 +107,7 @@ def fit_its(df):
         return pd.DataFrame(), None
     rows = []
     for (r1, a), (r2, b) in zip(agg.iloc[:-1].iterrows(), agg.iloc[1:].iterrows()):
-        if a["exposure"] == 0 or b["exposure"] == 0:
+        if a["exposure"] == 0 or b["exposure"] == 0 or a["count"] == 0:
             continue
         lo, hi = confint_poisson_2indep(b["count"], b["exposure"], a["count"], a["exposure"],
             compare="ratio", method="score", alpha=0.1)
@@ -116,7 +116,8 @@ def fit_its(df):
     irr_df = pd.DataFrame(rows)
     # Forecast next week — scale rate by last week's exposure to get counts
     last = agg.iloc[-1]
-    last_exposure = df["exposure"].iloc[-1]
+    last_rate = agg.index[-1]
+    last_exposure = df.loc[df["conversion_rate"] == last_rate, "exposure"].iloc[-1]
     mu = last["count"] / last["exposure"] * last_exposure
     lo = stats.poisson.ppf(0.025, mu)
     hi = stats.poisson.ppf(0.975, mu)

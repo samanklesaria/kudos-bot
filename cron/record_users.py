@@ -11,9 +11,11 @@ load_dotenv()
 def main():
     client = WebClient(token=os.environ["SLACK_BOT_TOKEN"])
     # ── num_users: unique members across all bot channels ─────────────────
+    bot_id = client.auth_test()["user_id"]
     users = set()
     for ch in client.users_conversations(types="public_channel")["channels"]:
         users.update(client.conversations_members(channel=ch["id"])["members"])
+    users.discard(bot_id)
     # ── workday_frac: non-holiday weekdays in current ISO week / 5 ───────
     today = date.today()
     monday = today - timedelta(days=today.weekday())

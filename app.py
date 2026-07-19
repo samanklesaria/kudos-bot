@@ -67,6 +67,9 @@ def _parse_kudos(text, bot_user_id):
     return recipients[0], None
 
 def _handle_kudos(giver_id, channel_id, message_ts, text, bot_user_id, *, delete_first=False):
+    if delete_first:
+        with pool.connection() as conn:
+            _delete_kudos(conn, channel_id, message_ts)
     recipient, error = _parse_kudos(text, bot_user_id)
     if error:
         if not delete_first:
@@ -81,8 +84,6 @@ def _handle_kudos(giver_id, channel_id, message_ts, text, bot_user_id, *, delete
         return
     giver_name, recipient_name = _name_executor.map(_get_display_name, [giver_id, recipient])
     with pool.connection() as conn:
-        if delete_first:
-            _delete_kudos(conn, channel_id, message_ts)
         row = _give_kudos_db(conn, giver_id, recipient, channel_id, message_ts, text, giver_name, recipient_name)
     if row is None: # if the entry already exists
         return
@@ -114,6 +115,8 @@ def handle_message_changed(event, context):
     if text == event.get("previous_message", {}).get("text", ""):
         return
     if f"<@{context.bot_user_id}>" not in text:
+        with pool.connection() as conn:
+            _delete_kudos(conn, event["channel"], message.get("ts"))
         return
     giver_id = message.get("user")
     if not giver_id:

@@ -13,25 +13,36 @@ from sklearn.cluster import KMeans
 
 load_dotenv()
 
+_EMBED_BATCH = 256
+
 def compute_embeddings(texts):
-    resp = requests.post(f"{os.environ['EMBEDDING_URI']}/v1/embeddings",
-        json={"input": texts}).json()
-    vecs = np.array([d["embedding"][:128] for d in resp["data"]])
-    return vecs / np.linalg.norm(vecs, axis=1, keepdims=True)
+    all_vecs = []
+    for i in range(0, len(texts), _EMBED_BATCH):
+        resp = requests.post(f"{os.environ['EMBEDDING_URI']}/v1/embeddings",
+            json={"input": texts[i:i + _EMBED_BATCH]}, timeout=60)
+        resp.raise_for_status()
+        all_vecs.extend(d["embedding"][:128] for d in resp.json()["data"])
+    vecs = np.array(all_vecs)
+    norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+    norms = np.where(norms == 0, 1, norms)
+    return vecs / norms
 
 def summarize_cluster(texts):
     msgs = "\n".join(f"- {t}" for t in texts)
-    resp = requests.post(f"{os.environ['CHAT_URI']}/v1/chat/completions", json={
+    resp = requests.post(f"{os.environ['CHAT_URI']}/v1/chat/completions", timeout=30, json={
         "messages": [{"role": "user", "content":
             f"Here are messages that share a common theme:\n{msgs}\n\n"
             "What is the common theme? Reply with only a short topic label."}],
-        "max_tokens": 50}).json()
-    return resp["choices"][0]["message"]["content"].strip()
+        "max_tokens": 50})
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"].strip()
 
 def main():
     with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
         register_vector(conn)
         backfill_embeddings(conn)
+    with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+        register_vector(conn)
         backfill_clusters(conn)
     print("Backfill complete.")
 
@@ -69,7 +80,8 @@ def backfill_clusters(conn):
     texts = [r[2] for r in rows]
     months = [r[3] for r in rows]
     embeddings = np.array([r[1] for r in rows])
-    embeddings /= np.linalg.norm(embeddings, axis=1, keepdims=True)
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    embeddings /= np.where(norms == 0, 1, norms)
     month_counts = Counter(months)
     sample_weight = np.array([1.0 / np.log(1 + month_counts[m]) for m in months])
     prev_centers = conn.execute("SELECT center FROM clusters ORDER BY id").fetchall()

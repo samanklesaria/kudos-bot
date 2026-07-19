@@ -169,14 +169,11 @@ JOIN users ur ON ur.id = k.recipient_id;
 
 -- Hard-delete a kudos, un-redeeming any kudos it had redeemed.
 CREATE PROCEDURE delete_kudos(p_channel_id VARCHAR, p_message_ts VARCHAR) LANGUAGE plpgsql AS $fn$
-DECLARE v_created_at TIMESTAMPTZ;
 BEGIN
     PERFORM pg_advisory_xact_lock(hashtext('try_redeem'));
-    SELECT created_at INTO v_created_at FROM kudos
-    WHERE channel_id = p_channel_id AND message_ts = p_message_ts LIMIT 1;
     UPDATE kudos SET redeemed_at = NULL, overflow = FALSE
     WHERE id IN (SELECT redeems FROM kudos WHERE channel_id = p_channel_id AND message_ts = p_message_ts AND redeems IS NOT NULL);
     DELETE FROM kudos WHERE channel_id = p_channel_id AND message_ts = p_message_ts;
-    PERFORM try_redeem(COALESCE(v_created_at, NOW()));
+    PERFORM try_redeem();
 END;
 $fn$;

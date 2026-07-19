@@ -3,7 +3,7 @@
 1. Define monthly budgets with increasing conversion rates (interventions for ITS).
 2. Simulate weekly event counts from Poisson distributions with rates adjusted at each budget change.
 3. Assign each event a user pair and a topic drawn from time-varying mixture weights.
-   Topics: 4 base topics in month 1, +1 new topic each subsequent month.
+   Topics: 3 base topics in month 1, +1 new topic each subsequent month.
 4. Write kudos, budgets, users to the database.
 """
 import os
@@ -114,6 +114,9 @@ def choose_texts(counts_M4, texts_N, topics_N, weights_MT, rng):
     c_WT = rng.multinomial(counts_M4, weights_MT[:,None,:]).reshape(-1, T)
     order_N = np.argsort(topics_N, kind="stable") # text indices sorted by topic
     pool_T = np.bincount(topics_N, minlength=T) # how many texts per topic
+    empty = np.where(pool_T == 0)[0]
+    if len(empty):
+        raise ValueError(f"CSV missing texts for topic indices: {empty.tolist()}")
     offsets_T = np.concatenate([[0], np.cumsum(pool_T)[:-1]]) # where each topic's block starts in `order`
     flat_c  = c_WT.ravel()
     topics_S = np.repeat(np.tile(np.arange(T), W), flat_c)
