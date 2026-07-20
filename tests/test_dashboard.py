@@ -1,15 +1,19 @@
 """Dash dashboard tests using dash.testing (dash_duo fixture).
 
-Requires: LLM servers running (CHAT_URI, EMBEDDING_URI) for simulate.py backfill.
+Seed data is loaded from a pg_dump fixture. To regenerate:
+    uv run python -c "from simulate import main; main()"  # requires LLM servers
+    pg_dump --no-owner --clean --if-exists $KUDOS_TEST_DATABASE_URL -f tests/fixtures/kudos_test.sql
 """
 import os
 import subprocess
+from pathlib import Path
 
 import chromedriver_autoinstaller
 import pandas as pd
 import pytest
 
 DB_URL = os.environ.get("KUDOS_TEST_DATABASE_URL", "postgresql://localhost/kudos_test")
+_DUMP = Path(__file__).resolve().parent / "fixtures" / "kudos_test.sql"
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -19,10 +23,19 @@ def _chromedriver():
 
 @pytest.fixture(scope="module", autouse=True)
 def seed():
-    """Run simulate.py to populate the test DB with realistic data."""
-    subprocess.run(
-        ["uv", "run", "python", "-c", "from simulate import main; main()"],
-        env={**os.environ, "DATABASE_URL": DB_URL}, check=True)
+    """Recreate schema and load data-only pg_dump fixture."""
+    schema_dir = Path(__file__).resolve().parent.parent / "schema"
+    sql_files = sorted(schema_dir.glob("*.sql"))
+    cmds = ["psql", DB_URL, "-v", "ON_ERROR_STOP=1",
+        "-c", "DROP SCHEMA IF EXISTS public CASCADE;",
+        "-c", "CREATE SCHEMA public;"]
+    for f in sql_files:
+        cmds += ["-f", str(f)]
+    cmds += [
+        "-c", "SET session_replication_role = replica;",
+        "-f", str(_DUMP),
+        "-c", "SET session_replication_role = DEFAULT;"]
+    subprocess.run(cmds, check=True)
 
 
 @pytest.fixture
@@ -32,7 +45,6 @@ def app(monkeypatch):
     return app
 
 
-# §6 Operational snapshot
 def test_snapshot_cards(dash_duo, app):
     dash_duo.start_server(app)
     dash_duo.wait_for_element(".card", timeout=10)
@@ -53,14 +65,12 @@ def test_spent_excludes_overflow(monkeypatch):
     redeemed = scalar("SELECT redeemed_this_month()")
     assert spent == (redeemed or 0)
 
-# §6 Kudos sent and spent over time
 def test_usage_plot(dash_duo, app):
     dash_duo.start_server(app)
     dash_duo.wait_for_element("#usage-plot .js-plotly-plot", timeout=10)
     traces = dash_duo.find_elements("#usage-plot .js-plotly-plot .trace")
     assert len(traces) >= 3
 
-# §6 Treatment effect estimation
 def test_irr_plot(dash_duo, app):
     dash_duo.start_server(app)
     dash_duo.wait_for_element("#irr-plot .js-plotly-plot", timeout=10)
@@ -85,7 +95,6 @@ def test_irr_empty_with_single_rate(monkeypatch):
     irr_df, fc = fit_its(df)
     assert irr_df.empty
 
-# §6 Distribution of points across recipients
 def test_leaderboard(dash_duo, app):
     dash_duo.start_server(app)
     dash_duo.wait_for_element(".tab--selected", timeout=10)
@@ -102,7 +111,12 @@ def test_leaderboard(dash_duo, app):
     rows = dash_duo.find_elements("#leaderboard-table .ag-row")
     assert len(rows) > 0
 
-# §6 Kudos message themes — streamgraph
+def _has_clusters():
+    import psycopg
+    with psycopg.connect(DB_URL) as conn:
+        return conn.execute("SELECT EXISTS(SELECT 1 FROM clusters)").fetchone()[0]
+
+@pytest.mark.skipif("not _has_clusters()", reason="No cluster data (requires LLM backfill)")
 def test_topic_streamgraph(dash_duo, app):
     dash_duo.start_server(app)
     dash_duo.wait_for_element(".tab--selected", timeout=10)
@@ -112,7 +126,7 @@ def test_topic_streamgraph(dash_duo, app):
     traces = dash_duo.find_elements("#stream-plot .js-plotly-plot .trace")
     assert len(traces) >= 2
 
-# §6 Kudos message themes — drill-down
+@pytest.mark.skipif("not _has_clusters()", reason="No cluster data (requires LLM backfill)")
 def test_topic_drilldown(dash_duo, app):
     dash_duo.start_server(app)
     dash_duo.wait_for_element(".tab--selected", timeout=10)

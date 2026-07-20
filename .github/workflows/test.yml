@@ -33,11 +33,15 @@ jobs:
             https://github.com/da77a/pg-schema-diff.git /tmp/pg-schema-diff
           cd /tmp/pg-schema-diff && go build -o "$HOME/.local/bin/pg-schema-diff" ./cmd/pg-schema-diff
 
-      - name: Apply schema
+      - name: Apply schema and seed dashboard data
         run: |
           uv sync
           bash scripts/migrate.sh
           psql "$DATABASE_URL" -f scripts/setup.sql
+          psql "$DATABASE_URL" \
+            -c "SET session_replication_role = replica;" \
+            -f tests/fixtures/kudos_test.sql \
+            -c "SET session_replication_role = DEFAULT;"
 
       - name: Run tests
-        run: uv run pytest -x --ignore=tests/test_dashboard.py
+        run: uv run pytest -x
