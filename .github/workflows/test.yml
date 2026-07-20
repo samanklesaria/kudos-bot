@@ -1,0 +1,43 @@
+name: Tests
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: kudos_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      KUDOS_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost/kudos_test
+      DATABASE_URL: postgresql://postgres:postgres@localhost/kudos_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      - name: Install pg-schema-diff
+        run: |
+          git clone --depth 1 --branch function-view-deps \
+            https://github.com/da77a/pg-schema-diff.git /tmp/pg-schema-diff
+          cd /tmp/pg-schema-diff && go build -o "$HOME/.local/bin/pg-schema-diff" ./cmd/pg-schema-diff
+
+      - name: Apply schema
+        run: |
+          uv sync
+          bash scripts/migrate.sh
+          psql "$DATABASE_URL" -f scripts/setup.sql
+
+      - name: Run tests
+        run: uv run pytest -x --ignore=tests/test_dashboard.py
