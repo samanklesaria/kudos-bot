@@ -94,9 +94,21 @@ def _exposure_by_week(df):
         logger.warning("Missing covariates for weeks: %s", missing)
     return result
 
+def _irr_ci(count2, exposure2, count1, exposure1, alpha=0.1):
+    """Exact conditional binomial CI for the incidence rate ratio count2/exposure2 / count1/exposure1.
+
+    Conditions on n = count1 + count2; X2|n ~ Binom(n, p) where p = rho*t2/(t1 + rho*t2).
+    Uses Clopper-Pearson for p, then transforms back to rho = p*t1 / ((1-p)*t2)."""
+    # ponytail: scipy.stats.beta is the Clopper-Pearson exact CI, no extra deps
+    n = int(count1 + count2)
+    k = int(count2)
+    p_lo = stats.beta.ppf(alpha / 2, k, n - k + 1) if k > 0 else 0.0
+    p_hi = stats.beta.ppf(1 - alpha / 2, k + 1, n - k) if k < n else 1.0
+    to_rho = lambda p: p * exposure1 / ((1 - p) * exposure2) if p < 1 else float("inf")
+    return to_rho(p_lo), to_rho(p_hi)
+
 def fit_its(df):
     """Pairwise IRR + CI for consecutive conversion rates via Poisson 2-sample comparison."""
-    from statsmodels.stats.rates import confint_poisson_2indep
     df = df.copy()
     df["exposure"] = _exposure_by_week(df)
     df = df.dropna(subset=["exposure"])
@@ -109,8 +121,7 @@ def fit_its(df):
     for (r1, a), (r2, b) in zip(agg.iloc[:-1].iterrows(), agg.iloc[1:].iterrows()):
         if a["exposure"] == 0 or b["exposure"] == 0 or a["count"] == 0:
             continue
-        lo, hi = confint_poisson_2indep(b["count"], b["exposure"], a["count"], a["exposure"],
-            compare="ratio", method="score", alpha=0.1)
+        lo, hi = _irr_ci(b["count"], b["exposure"], a["count"], a["exposure"])
         irr = (b["count"] / b["exposure"]) / (a["count"] / a["exposure"])
         rows.append(dict(month=rate_month[r2], rate=r2, irr=irr, lo=lo, hi=hi))
     irr_df = pd.DataFrame(rows)
@@ -245,7 +256,7 @@ def _build_irr_chart(irr_df):
         fig.update_layout(
             title="Treatment Effect: How Each Rate Change Affected Kudos Activity<br>"
                   "<sup>Incidence rate ratio (IRR) vs prior rate, adjusted for team size and holidays. "
-                  "IRR > 1 = more kudos; error bars = 90% CI.</sup>",
+                  "IRR > 1 = more kudos; error bars = 90% CI for binomial test.</sup>",
             margin=dict(t=60, b=30),
             xaxis_title="Month", yaxis_title="Incidence Rate Ratio")
     return fig

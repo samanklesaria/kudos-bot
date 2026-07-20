@@ -83,11 +83,18 @@ print(result.summary())
 ## IRR table
 
 Each row is the incidence rate ratio for one period vs. the previous, with 90%
-confidence intervals via score test inversion (matching the dashboard's
-`confint_poisson_2indep(..., method="score")`).
+confidence intervals via exact conditional binomial (Clopper-Pearson),
+matching the dashboard's `_irr_ci`.
 
 ```python {.marimo}
-from statsmodels.stats.rates import confint_poisson_2indep
+def _irr_ci(count2, exposure2, count1, exposure1, alpha=0.1):
+    """Exact conditional binomial CI for the IRR."""
+    n = int(count1 + count2)
+    k = int(count2)
+    p_lo = stats.beta.ppf(alpha / 2, k, n - k + 1) if k > 0 else 0.0
+    p_hi = stats.beta.ppf(1 - alpha / 2, k + 1, n - k) if k < n else 1.0
+    to_rho = lambda p: p * exposure1 / ((1 - p) * exposure2) if p < 1 else float("inf")
+    return to_rho(p_lo), to_rho(p_hi)
 
 agg = df.groupby("conversion_rate").agg(
     count=("redeemed", "sum"), exposure=("exposure", "sum")).sort_index()
@@ -96,9 +103,7 @@ for (r1, a), (r2, b) in zip(agg.iloc[:-1].iterrows(), agg.iloc[1:].iterrows()):
     if a["exposure"] == 0 or b["exposure"] == 0:
         continue
     irr = (b["count"] / b["exposure"]) / (a["count"] / a["exposure"])
-    lo, hi = confint_poisson_2indep(
-        b["count"], b["exposure"], a["count"], a["exposure"],
-        compare="ratio", method="score", alpha=0.1)
+    lo, hi = _irr_ci(b["count"], b["exposure"], a["count"], a["exposure"])
     rows.append(dict(IRR=irr, lo=lo, hi=hi))
 irr_table = pd.DataFrame(rows,
     index=[f"Period {i+1} vs {i}" for i in range(len(rows))])

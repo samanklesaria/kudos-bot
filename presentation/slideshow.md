@@ -85,7 +85,7 @@ Edits delete the old kudos (un-redeeming linked points) and re-evaluate from scr
 - Pairwise IRR between consecutive conversion-rate periods
 - Kudos counts $Y_j$, exposures $E_j = \sum (\text{workday\_frac} \times \text{num\_users})$
 
-$$\text{IRR} = \frac{Y_2 / E_2}{Y_1 / E_1} \qquad \text{CI via score test inversion}$$
+$$\text{IRR} = \frac{Y_2 / E_2}{Y_1 / E_1} \qquad \text{CI via binomial test inversion}$$
 
 - 90% confidence intervals on each IRR
 - Forecast: Poisson prediction scaled by next week's exposure
@@ -121,13 +121,13 @@ Live demo: Poisson model diagnostics (quantile residuals, overdispersion, autoco
 
 # Lines of Code
 
-845 lines total — bot, dashboard, cron jobs, schema, and all business logic.
+878 lines total — bot, dashboard, cron jobs, schema, and all business logic.
 
 | Component | Lines |
 |-----------|------:|
-| Python    |   650 |
-| SQL       |   195 |
-| **Total** | **845** |
+| Python    |   677 |
+| SQL       |   201 |
+| **Total** | **878** |
 
 # AI in Development
 
