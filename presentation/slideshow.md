@@ -47,11 +47,21 @@ Monthly point budget and conversion rate set by accounting. Over-budget kudos ar
 
 Bob's second receipt arrived after the budget was exhausted — it overflows and he earns nothing despite otherwise being owed.
 
-# Demo: Slack Bot
+# Screenshots
 
-Live demo: onboarding, content check, edit-to-fix, accounting cron job, weekly reminder, and private channel rejection.
+\begin{columns}[T]
+\begin{column}{0.43\textwidth}
+\includegraphics[width=\textwidth]{screenshots/welcome.png}\\[6pt]
+\includegraphics[width=\textwidth]{screenshots/llm_gate.png}
+\end{column}
+\begin{column}{0.43\textwidth}
+\includegraphics[width=\textwidth]{screenshots/basic_message.png}\\[6pt]
+\includegraphics[width=\textwidth]{screenshots/no_private.png}\\[6pt]
+\includegraphics[width=\textwidth]{screenshots/accounting.png}
+\end{column}
+\end{columns}
 
-# Demo: Dashboard
+# Dashboard Demo
 
 Live demo: operational snapshot, usage & budget forecast, treatment effect plot, leaderboard, and topic drill-down.
 
