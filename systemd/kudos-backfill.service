@@ -6,5 +6,5 @@ After=postgresql.service
 Type=oneshot
 WorkingDirectory=/opt/kudos
 EnvironmentFile=/opt/kudos/.env
-ExecStart=/opt/kudos/.venv/bin/python cron/backfill.py
+ExecStart=/opt/kudos/.venv/bin/python -m cron.backfill
 ExecStartPost=/usr/bin/systemctl restart kudos-dashboard.service

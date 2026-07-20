@@ -16,12 +16,11 @@ from dotenv import load_dotenv
 from datetime import date
 from dateutil.relativedelta import relativedelta
 from sizecheck import sizecheck
-import subprocess
-
 from cron.backfill import main as backfill
 
 load_dotenv()
 DATABASE_URL = os.environ["DATABASE_URL"]
+_SETUP_SQL = os.path.join(os.path.dirname(__file__), "scripts", "setup.sql")
 USERNAMES_FILE = os.path.join(os.path.dirname(__file__), "usernames.txt")
 N_MONTHS = 8
 BASE_TOPICS = 3
@@ -78,16 +77,12 @@ def simulate_ITS_counts(rng, covariates):
     mu_M4 = mu.reshape((N_MONTHS, 4))
     return rng.poisson(mu).reshape((N_MONTHS, 4)), mu_M4
 
-def clear_db():
-    subprocess.run(
-        ["psql", DATABASE_URL, "-f", "scripts/setup.sql"],
-        check=True)
-    with psycopg.connect(DATABASE_URL) as conn:
-        conn.execute("DELETE FROM budgets")
-
 def write_db(users, budgets, records, covariates, dates):
-    clear_db()
+    with open(_SETUP_SQL) as f:
+        setup_sql = f.read()
     with psycopg.connect(DATABASE_URL) as conn:
+        conn.execute(setup_sql)
+        conn.execute("DELETE FROM budgets")
         for display_name in users:
             conn.execute(
                 "INSERT INTO users (id, display_name) VALUES (%s, %s)", (display_name, display_name))

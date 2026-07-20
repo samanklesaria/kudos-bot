@@ -15,6 +15,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 ACCOUNTING_CHANNEL = os.environ.get("KUDOS_ACCOUNTING_CHANNEL")
+if not ACCOUNTING_CHANNEL:
+    logger.warning("KUDOS_ACCOUNTING_CHANNEL not set — budget alerts will be disabled")
 pool = ConnectionPool(os.environ["DATABASE_URL"])
 app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
 _name_executor = ThreadPoolExecutor(max_workers=2)
@@ -67,9 +69,6 @@ def _parse_kudos(text, bot_user_id):
     return recipients[0], None
 
 def _handle_kudos(giver_id, channel_id, message_ts, text, bot_user_id, *, delete_first=False):
-    if delete_first:
-        with pool.connection() as conn:
-            _delete_kudos(conn, channel_id, message_ts)
     recipient, error = _parse_kudos(text, bot_user_id)
     if error:
         if not delete_first:
@@ -103,7 +102,7 @@ def _handle_kudos(giver_id, channel_id, message_ts, text, bot_user_id, *, delete
 
 @app.event("app_mention")
 def handle_mention(event, context):
-    if "edited" in event:
+    if "edited" in event or event.get("channel_type") == "im":
         return
     _handle_kudos(event["user"], event["channel"], event["ts"],
         event.get("text", ""), context.bot_user_id)
@@ -114,9 +113,11 @@ def handle_message_changed(event, context):
     text = message.get("text", "")
     if text == event.get("previous_message", {}).get("text", ""):
         return
-    if f"<@{context.bot_user_id}>" not in text:
-        with pool.connection() as conn:
-            _delete_kudos(conn, event["channel"], message.get("ts"))
+    bot_mention = f"<@{context.bot_user_id}>"
+    if bot_mention not in text:
+        if bot_mention in event.get("previous_message", {}).get("text", ""):
+            with pool.connection() as conn:
+                _delete_kudos(conn, event["channel"], message.get("ts"))
         return
     giver_id = message.get("user")
     if not giver_id:

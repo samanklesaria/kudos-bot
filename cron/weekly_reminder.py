@@ -5,29 +5,33 @@ import time
 import psycopg
 from dotenv import load_dotenv
 from slack_sdk import WebClient
+from cron import paginate, get_team_id
 
 logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-def _get_bot_channel_members(client, team_id):
+def _get_bot_channel_members(client):
     bot_id = client.auth_test()["user_id"]
+    team_id = get_team_id(client)
     members = set()
-    for channel in client.conversations_list(types="public_channel", team_id=team_id)["channels"]:
-        members.update(client.conversations_members(channel=channel["id"])["members"])
+    kwargs = {"types": "public_channel"}
+    if team_id:
+        kwargs["team_id"] = team_id
+    for channel in paginate(client.conversations_list, "channels", **kwargs):
+        members.update(paginate(client.conversations_members, "members", channel=channel["id"]))
     members.discard(bot_id)
     return members
 
 def main():
     client = WebClient(token=os.environ["SLACK_BOT_TOKEN"])
-    team_id = client.auth_teams_list()["teams"][0]["id"]
     with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
         gave_this_week = {
             row[0] for row in conn.execute(
                 "SELECT DISTINCT giver_id FROM kudos "
                 "WHERE created_at >= date_trunc('week', NOW())"
             ).fetchall()}
-    for user_id in _get_bot_channel_members(client, team_id) - gave_this_week:
+    for user_id in _get_bot_channel_members(client) - gave_this_week:
         try:
             client.chat_postMessage(
                 channel=user_id,

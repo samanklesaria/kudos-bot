@@ -28,25 +28,42 @@ def env(monkeypatch):
     monkeypatch.setenv("KUDOS_ACCOUNTING_CHANNEL", "C_ACCT")
 
 
-# ── accounting ────────────────────────────────────────────────────────────
+# ── helpers ───────────────────────────────────────────────────────────────
 
-def _seed_last_month_redemption(conn):
-    """Insert a budget and a redeemed kudos dated last month."""
+def _ensure_users(conn, *user_ids):
+    for uid in user_ids:
+        conn.execute(
+            "INSERT INTO users (id, display_name) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            (uid, uid))
+
+def _seed_current_month_redemption(conn):
+    """Insert users, a budget, and a redeemed kudos in the current month."""
+    _ensure_users(conn, "U1", "U2")
     conn.execute(
         "INSERT INTO budgets (month_date, point_budget, conversion_rate) "
-        "VALUES ((date_trunc('month', CURRENT_DATE) - interval '1 month')::date, 100, 5.0)")
+        "VALUES (date_trunc('month', CURRENT_DATE)::date, 100, 5.0)")
     conn.execute(
         "INSERT INTO kudos (giver_id, recipient_id, channel_id, message_ts, "
         "redeemed_at, created_at) VALUES "
-        "('U1', 'U2', 'C1', '1.001', "
-        "date_trunc('month', CURRENT_DATE) - interval '1 day', "
-        "date_trunc('month', CURRENT_DATE) - interval '2 days')")
+        "('U1', 'U2', 'C1', '1.001', NOW(), NOW() - interval '1 day')")
     conn.commit()
 
+def _mock_channels(client, *user_ids, bot_id="UBOT"):
+    """Set up mocks for paginated conversations_list + conversations_members."""
+    client.auth_test.return_value = {"user_id": bot_id}
+    client.auth_teams_list.return_value = {"teams": [{"id": "T1"}]}
+    client.conversations_list.return_value = {
+        "channels": [{"id": "C1"}],
+        "response_metadata": {"next_cursor": ""}}
+    client.conversations_members.return_value = {
+        "members": list(user_ids),
+        "response_metadata": {"next_cursor": ""}}
+
+# ── accounting ────────────────────────────────────────────────────────────
 
 @patch("cron.accounting.WebClient")
 def test_accounting_posts_redemptions(MockClient, conn, env):
-    _seed_last_month_redemption(conn)
+    _seed_current_month_redemption(conn)
     client = MockClient.return_value
     client.chat_getPermalink.return_value = {"permalink": "https://slack.com/p/123"}
     from cron.accounting import main
@@ -69,32 +86,27 @@ def test_accounting_no_redemptions(MockClient, conn, env):
 
 @patch("cron.accounting.WebClient")
 def test_accounting_permalink_fallback(MockClient, conn, env):
-    _seed_last_month_redemption(conn)
+    _seed_current_month_redemption(conn)
     client = MockClient.return_value
     client.chat_getPermalink.side_effect = Exception("channel_not_found")
     from cron.accounting import main
     main()
     msg = client.chat_postMessage.call_args[1]["text"]
-    assert "#1 (C1)" in msg
+    assert "<@U2>" in msg
+    assert "link" not in msg
 
 
 # ── weekly_reminder ───────────────────────────────────────────────────────
 
-def _make_members(*user_ids, bots=(), deleted=()):
-    members = []
-    for uid in user_ids:
-        members.append({"id": uid, "is_bot": uid in bots, "deleted": uid in deleted})
-    return {"members": members, "response_metadata": {"next_cursor": ""}}
-
-
 @patch("cron.weekly_reminder.WebClient")
 def test_reminder_skips_recent_givers(MockClient, conn, env):
+    _ensure_users(conn, "U1", "U2", "U3")
     conn.execute(
         "INSERT INTO kudos (giver_id, recipient_id, channel_id, message_ts) "
         "VALUES ('U1', 'U2', 'C1', '1.001')")
     conn.commit()
     client = MockClient.return_value
-    client.users_list.return_value = _make_members("U1", "U2", "U3")
+    _mock_channels(client, "U1", "U2", "U3")
     from cron.weekly_reminder import main
     main()
     reminded = {c[1]["channel"] for c in client.chat_postMessage.call_args_list}
@@ -104,23 +116,13 @@ def test_reminder_skips_recent_givers(MockClient, conn, env):
 
 
 @patch("cron.weekly_reminder.WebClient")
-def test_reminder_skips_bots(MockClient, conn, env):
+def test_reminder_excludes_bot_self(MockClient, conn, env):
+    """The bot's own user ID should not receive a reminder."""
     conn.commit()
     client = MockClient.return_value
-    client.users_list.return_value = _make_members("U1", "UBOT", bots=("UBOT",))
+    _mock_channels(client, "U1", "UBOT")
     from cron.weekly_reminder import main
     main()
     reminded = {c[1]["channel"] for c in client.chat_postMessage.call_args_list}
     assert "U1" in reminded
     assert "UBOT" not in reminded
-
-
-@patch("cron.weekly_reminder.WebClient")
-def test_reminder_skips_slackbot(MockClient, conn, env):
-    conn.commit()
-    client = MockClient.return_value
-    client.users_list.return_value = _make_members("U1", "USLACKBOT")
-    from cron.weekly_reminder import main
-    main()
-    reminded = {c[1]["channel"] for c in client.chat_postMessage.call_args_list}
-    assert "USLACKBOT" not in reminded

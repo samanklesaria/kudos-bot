@@ -1,9 +1,14 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 
+CREATE TABLE users (
+    id VARCHAR(21) PRIMARY KEY,
+    display_name VARCHAR(64) NOT NULL
+);
+
 CREATE TABLE kudos (
     id SERIAL PRIMARY KEY,
-    giver_id VARCHAR(21) NOT NULL,
-    recipient_id VARCHAR(21) NOT NULL,
+    giver_id VARCHAR(21) NOT NULL REFERENCES users(id),
+    recipient_id VARCHAR(21) NOT NULL REFERENCES users(id),
     channel_id VARCHAR(21) NOT NULL,
     message_ts VARCHAR(21) NOT NULL,
     message_text TEXT,
@@ -15,15 +20,10 @@ CREATE TABLE kudos (
     CHECK(giver_id <> recipient_id)
 );
 
-CREATE TABLE users (
-    id VARCHAR(21) PRIMARY KEY,
-    display_name VARCHAR(64) NOT NULL
-);
-
 CREATE TABLE budgets (
     month_date DATE PRIMARY KEY,  -- 1st of the month
-    point_budget INTEGER NOT NULL,
-    conversion_rate NUMERIC NOT NULL
+    point_budget INTEGER NOT NULL CHECK (point_budget >= 0),
+    conversion_rate NUMERIC NOT NULL CHECK (conversion_rate > 0)
 );
 
 CREATE TABLE clusters (

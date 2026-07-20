@@ -18,12 +18,10 @@ import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
 from dash_bootstrap_templates import load_figure_template
 from dotenv import load_dotenv
-from pgvector.psycopg import register_vector
-
 load_dotenv()
 logger = logging.getLogger(__name__)
 DATABASE_URL = os.environ["DATABASE_URL"]
-pool = ConnectionPool(DATABASE_URL, configure=register_vector)
+pool = ConnectionPool(DATABASE_URL)
 
 def query(sql, params=None):
     with pool.connection() as conn:
@@ -44,7 +42,7 @@ def load_snapshot():
         "SELECT point_budget FROM effective_budget()")
     spent = scalar(
         "SELECT COUNT(*)::int FROM kudos "
-        "WHERE redeemed_at IS NOT NULL "
+        "WHERE redeemed_at IS NOT NULL AND NOT overflow "
         "AND redeemed_at >= date_trunc('month', NOW())")
     overflow = scalar(
         "SELECT COUNT(*)::int FROM kudos "
@@ -194,7 +192,7 @@ app.clientside_callback(
 def _build_usage_chart(df):
     df = df.copy()
     df["x"] = range(len(df))
-    weekly_budget = df["point_budget"].astype(float) / 4
+    weekly_budget = df["point_budget"].astype(float) / df.groupby("ym")["yw"].transform("count")
     fig = go.Figure()
     fig.add_trace(go.Bar(x=df["x"], y=df["acquired"], name="Acquired",
         marker_color="#50B86C"))
@@ -206,11 +204,13 @@ def _build_usage_chart(df):
         mode="lines", line=dict(dash="dot", color="red")))
     month_ticks = df.groupby("ym")["x"].first()
     month_budgets = df.groupby("ym").first()
+    month_centers = df.groupby("ym")["x"].mean()
+    weekly_budget_by_month = df.groupby("ym").apply(lambda g: g["point_budget"].iloc[0] / len(g))
     dollar_annotations = [dict(
-        x=month_ticks[ym] - 0.5, y=float(month_budgets.loc[ym, "point_budget"]) / 4,
+        x=month_centers[ym], y=float(weekly_budget_by_month[ym]),
         text=f"${int(month_budgets.loc[ym, 'point_budget'] * month_budgets.loc[ym, 'conversion_rate'])} (${month_budgets.loc[ym, 'conversion_rate']:.0f}/pt)",
         showarrow=False, yshift=10, font=dict(color="red", size=10))
-        for ym in month_ticks.index]
+        for ym in month_centers.index]
     month_lines = [dict(type="line", x0=x - 0.5, x1=x - 0.5, y0=0, y1=1, yref="paper",
         line=dict(dash="dot", color="grey", width=1)) for x in month_ticks.values[1:]]
     fig.update_layout(
@@ -229,8 +229,8 @@ def _add_forecast(fig, df):
         irr_df, fc = fit_its(df[weeks_per_month >= 4])
         fx = df["x"].max() + 2
         fig.add_trace(go.Scatter(x=[fx], y=[fc["median"]], mode="markers",
-            marker=dict(symbol="diamond", size=10, color="#4A90D9"),
-            name="Forecast", error_y=dict(type="data", symmetric=False,
+            marker=dict(symbol="diamond", size=10, color="#50B86C"),
+            name="Forecast (acquired)", error_y=dict(type="data", symmetric=False,
                 array=[fc["hi"] - fc["median"]], arrayminus=[fc["median"] - fc["lo"]])))
         next_month = pd.Timestamp(df["ym"].iloc[-1] + "-01") + pd.DateOffset(months=1)
         tv = fig.layout.xaxis.tickvals
@@ -245,7 +245,9 @@ def _add_forecast(fig, df):
 
 def _build_irr_chart(irr_df):
     fig = go.Figure()
-    if not irr_df.empty:
+    if irr_df.empty:
+        fig.update_layout(title="Insufficient data for IRR analysis")
+    else:
         fig.add_trace(go.Scatter(
             x=irr_df["month"], y=irr_df["irr"], mode="markers+lines",
             marker=dict(size=8, color="#50B86C"),

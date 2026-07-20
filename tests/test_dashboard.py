@@ -6,11 +6,15 @@ import os
 import subprocess
 
 import chromedriver_autoinstaller
+import pandas as pd
 import pytest
 
-chromedriver_autoinstaller.install()
-
 DB_URL = os.environ.get("KUDOS_TEST_DATABASE_URL", "postgresql://localhost/kudos_test")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _chromedriver():
+    chromedriver_autoinstaller.install()
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -22,8 +26,8 @@ def seed():
 
 
 @pytest.fixture
-def app():
-    os.environ["DATABASE_URL"] = DB_URL
+def app(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", DB_URL)
     from dash_app import app
     return app
 
@@ -41,6 +45,14 @@ def test_snapshot_cards(dash_duo, app):
     for card in cards:
         assert "pts" in card.find_element("css selector", "h3").text
 
+def test_spent_excludes_overflow(monkeypatch):
+    """Spent count should match redeemed_this_month (which excludes overflow)."""
+    monkeypatch.setenv("DATABASE_URL", DB_URL)
+    from dash_app import load_snapshot, scalar
+    _, spent, _ = load_snapshot()
+    redeemed = scalar("SELECT redeemed_this_month()")
+    assert spent == (redeemed or 0)
+
 # §6 Kudos sent and spent over time
 def test_usage_plot(dash_duo, app):
     dash_duo.start_server(app)
@@ -55,16 +67,23 @@ def test_irr_plot(dash_duo, app):
     traces = dash_duo.find_elements("#irr-plot .js-plotly-plot .trace")
     assert len(traces) > 0
 
-def test_irr_values():
-    """IRR CIs should be in [0.5, 3] and the first IRR should be highest."""
-    os.environ["DATABASE_URL"] = DB_URL
+def test_irr_values(monkeypatch):
+    """IRR CIs should be in [0.1, 5] and the first IRR should be highest."""
+    monkeypatch.setenv("DATABASE_URL", DB_URL)
     from dash_app import load_weekly, fit_its
-    df = load_weekly()
-    weeks_per_month = df.groupby("ym")["ym"].transform("size")
-    irr_df, _ = fit_its(df[weeks_per_month >= 4])
+    irr_df, _ = fit_its(load_weekly())
     assert len(irr_df) >= 2
     assert all(0.1 <= lo and hi <= 5 for lo, hi in zip(irr_df["lo"], irr_df["hi"]))
-    assert irr_df["irr"].iloc[0] > irr_df["irr"].iloc[1:]  .mean()
+    assert irr_df["irr"].iloc[0] > irr_df["irr"].iloc[1:].mean()
+
+def test_irr_empty_with_single_rate(monkeypatch):
+    """fit_its returns empty DataFrame when there's only one conversion rate."""
+    monkeypatch.setenv("DATABASE_URL", DB_URL)
+    from dash_app import fit_its
+    df = pd.DataFrame({"yw": ["2026-01"], "ym": ["2026-01"], "acquired": [5],
+        "redeemed": [3], "point_budget": [100], "conversion_rate": [1.0]})
+    irr_df, fc = fit_its(df)
+    assert irr_df.empty
 
 # §6 Distribution of points across recipients
 def test_leaderboard(dash_duo, app):

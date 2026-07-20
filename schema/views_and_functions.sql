@@ -27,21 +27,25 @@ RETURNS INTEGER LANGUAGE SQL STABLE AS $fn$
 $fn$;
 
 -- Validates that a giver can give kudos right now. Returns NULL on success, error message on failure.
+-- Uses EXISTS so the self-kudos check fires even when the giver has no prior kudos.
+-- CURRENT_DATE respects session timezone (set the server or session TZ to the org's timezone).
 CREATE FUNCTION check_kudos_limits(p_giver_id VARCHAR, p_recipient_id VARCHAR)
 RETURNS VARCHAR LANGUAGE SQL AS $fn$
     SELECT CASE
         WHEN p_giver_id = p_recipient_id
             THEN 'You can''t give kudos to yourself!'
-        WHEN bool_or(created_at >= date_trunc('day', NOW()))
+        WHEN EXISTS(SELECT 1 FROM kudos
+            WHERE giver_id = p_giver_id AND created_at >= CURRENT_DATE)
             THEN 'You''ve already given kudos today. Try again tomorrow!'
-        WHEN bool_or(recipient_id = p_recipient_id)
+        WHEN EXISTS(SELECT 1 FROM kudos
+            WHERE giver_id = p_giver_id AND recipient_id = p_recipient_id
+            AND created_at >= date_trunc('month', CURRENT_DATE))
             THEN 'You''ve already given kudos to this person this month.'
-    END
-    FROM kudos
-    WHERE giver_id = p_giver_id
-        AND created_at >= date_trunc('month', NOW());
+    END;
 $fn$;
 
+-- Pairs each giver's nth unredeemed give with the nth unredeemed receive for that giver.
+-- This implements a "pay-it-forward" model: giving kudos redeems kudos you've received.
 CREATE VIEW to_redeem AS
 WITH gives AS (
     SELECT id, giver_id,
@@ -90,7 +94,7 @@ BEGIN
     ),
     linked AS (
         UPDATE kudos SET redeems = p.receive_id
-        FROM pairs p WHERE kudos.id = p.give_id
+        FROM pairs p WHERE kudos.id = p.give_id AND p.rn <= v_remaining
     )
     SELECT
         COALESCE(array_agg(DISTINCT recipient_id), '{}'),

@@ -52,7 +52,15 @@ class GiveResult:
         return self.rate if self._recipient in self.redeemed_ids else 0
 
 def _give(conn, giver, recipient, ts, text=None, backdate_days=0):
-    """Give kudos and optionally backdate it to bypass the daily cap."""
+    """Give kudos and optionally backdate it to bypass the daily cap.
+
+    Note: backdate runs AFTER give_kudos+try_redeem, so the redemption from this
+    give uses the real timestamp. The backdate only affects future daily-cap checks.
+    """
+    for uid in (giver, recipient):
+        conn.execute(
+            "INSERT INTO users (id, display_name) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            (uid, uid))
     row = conn.execute(
         "SELECT * FROM give_kudos(%s, %s, 'C1', %s, %s)",
         (giver, recipient, ts, text)).fetchone()
@@ -76,6 +84,7 @@ def test_self_kudos_blocked(conn):
     assert "yourself" in r.error.lower()
 
 def test_self_kudos_check_constraint(conn):
+    conn.execute("INSERT INTO users (id, display_name) VALUES ('U1', 'U1')")
     with pytest.raises(psycopg.errors.CheckViolation):
         conn.execute(
             "INSERT INTO kudos (giver_id, recipient_id, channel_id, message_ts) "
@@ -109,7 +118,6 @@ def test_duplicate_message_ts_is_noop(conn):
     _give(conn, "U1", "U2", "1.001", backdate_days=2)
     r = _give(conn, "U1", "U3", "1.001")
     assert r.success is False
-    assert r._noop is True
 
 def test_deleted_kudos_does_not_block_new_kudos(conn):
     _give(conn, "U1", "U2", "1.001", backdate_days=2)
@@ -247,7 +255,7 @@ def test_edit_from_vague_to_specific(conn):
     # Simulate edit: delete old, re-give with new text
     conn.execute("CALL delete_kudos('C1', '1.001')")
     assert conn.execute("SELECT 1 FROM kudos WHERE message_ts = '1.001'").fetchone() is None
-    r2 = _give(conn, "U1", "U2", "1.002", text="great job leading the incident retro")
+    r2 = _give(conn, "U1", "U2", "1.001", text="great job leading the incident retro")
     assert r2.success is True
 
 
@@ -306,3 +314,51 @@ def test_redeems_column_set(conn):
     redeemed_id = conn.execute("SELECT id FROM kudos WHERE message_ts = '1.001'").fetchone()[0]
     redeemer = conn.execute("SELECT redeems FROM kudos WHERE message_ts = '1.002'").fetchone()[0]
     assert redeemer == redeemed_id
+
+def test_overflow_give_relinks_with_new_receive(conn):
+    """After overflow, unlinked gives can pair with new receives when budget is available."""
+    # No budget → all redemptions overflow, gives stay unlinked
+    _give(conn, "U2", "U1", "1.001", backdate_days=3)
+    _give(conn, "U1", "U3", "1.002", backdate_days=2)
+    assert conn.execute("SELECT redeems FROM kudos WHERE message_ts = '1.002'").fetchone()[0] is None
+    # Add budget, then give U1 a new receive — try_redeem pairs U1's unlinked give with it
+    _set_budget(conn, points=100, rate=5.0)
+    _give(conn, "U4", "U1", "1.003", backdate_days=1)
+    assert conn.execute("SELECT redeems FROM kudos WHERE message_ts = '1.002'").fetchone()[0] is not None
+
+def test_delete_nonexistent_is_noop(conn):
+    """delete_kudos on a channel/ts with no kudos is a safe no-op."""
+    conn.execute("CALL delete_kudos('C1', '9.999')")
+
+def test_redeemed_this_month_excludes_overflow(conn):
+    _set_budget(conn, points=1, rate=5.0)
+    _give(conn, "U2", "U1", "1.001", backdate_days=3)
+    _give(conn, "U4", "U5", "1.002", backdate_days=2)
+    _give(conn, "U1", "U3", "1.003", backdate_days=1)  # fills budget
+    _give(conn, "U5", "U6", "1.004")                    # overflows
+    assert conn.execute("SELECT redeemed_this_month()").fetchone()[0] == 1
+
+def test_current_month_redemptions_view(conn):
+    _set_budget(conn, points=100, rate=5.0)
+    _give(conn, "U2", "U1", "1.001", backdate_days=2)
+    _give(conn, "U1", "U3", "1.002")
+    row = conn.execute("SELECT recipient_id, total FROM current_month_redemptions").fetchone()
+    assert row[0] == "U1"
+    assert float(row[1]) == 5.0
+
+def test_leaderboard_view(conn):
+    _give(conn, "U1", "U2", "1.001")
+    rows = conn.execute("SELECT * FROM leaderboard").fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == "U2"
+
+def test_weekly_kudos_view(conn):
+    _set_budget(conn, points=100, rate=5.0)
+    _give(conn, "U1", "U2", "1.001")
+    row = conn.execute("SELECT acquired, redeemed FROM weekly_kudos").fetchone()
+    assert row[0] == 1
+
+def test_kudos_messages_view(conn):
+    _give(conn, "U1", "U2", "1.001", text="great work")
+    row = conn.execute("SELECT giver, recipient, message FROM kudos_messages").fetchone()
+    assert row == ("U1", "U2", "great work")

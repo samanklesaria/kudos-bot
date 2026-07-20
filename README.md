@@ -156,6 +156,8 @@ docker build -t kudos .
 docker run -d --env-file .env -p 8050:8050 kudos
 ```
 
+The image does **not** bake in secrets. You must provide a `.env` file (or equivalent) at runtime with the variables listed in [Environment Variables](#environment-variables). Use `--env-file`, a bind mount to `/opt/kudos/.env`, or your platform's secrets manager (e.g. AWS Secrets Manager, Vault, Docker secrets).
+
 The container runs `systemd` as PID 1, starts Postgres automatically, and enables:
 
 | Unit | Description |

@@ -1,0 +1,12 @@
+# Python
+.venv/
+env*/
+.env
+.playwright-mcp
+__pycache__
+.ipynb_checkpoints/
+unsloth
+uv.lock
+
+# macOS
+.DS_Store

@@ -6,4 +6,4 @@ After=postgresql.service
 Type=oneshot
 WorkingDirectory=/opt/kudos
 EnvironmentFile=/opt/kudos/.env
-ExecStart=/opt/kudos/.venv/bin/python cron/accounting.py
+ExecStart=/opt/kudos/.venv/bin/python -m cron.accounting

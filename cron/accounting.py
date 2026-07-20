@@ -9,7 +9,8 @@ load_dotenv()
 
 def main():
     client = WebClient(token=os.environ["SLACK_BOT_TOKEN"])
-    team_id = client.auth_teams_list()["teams"][0]["id"]
+    from cron import get_team_id
+    team_id = get_team_id(client)
     accounting_channel = os.environ["KUDOS_ACCOUNTING_CHANNEL"]
     with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
         current_month = conn.execute("SELECT * FROM current_month_redemptions").fetchall()
@@ -25,13 +26,11 @@ def main():
                 filter(None, (_permalink(c, t) for c, t in zip(channels, timestamps))))
             lines.append(f"• <@{recipient_id}>: {len(channels)} point(s), ${total:.2f} — {links}")
         client.chat_postMessage(
-            team_id=team_id,
-            channel=accounting_channel,
+            channel=accounting_channel, team_id=team_id,
             text="\n".join(lines))
     else:
         client.chat_postMessage(
-            team_id=team_id,
-            channel=accounting_channel,
+            channel=accounting_channel, team_id=team_id,
             text="No redemptions this month.")
 
 if __name__ == "__main__":

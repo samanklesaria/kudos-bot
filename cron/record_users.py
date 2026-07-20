@@ -5,6 +5,7 @@ import holidays
 import psycopg
 from dotenv import load_dotenv
 from slack_sdk import WebClient
+from cron import paginate, get_team_id
 
 load_dotenv()
 
@@ -12,9 +13,13 @@ def main():
     client = WebClient(token=os.environ["SLACK_BOT_TOKEN"])
     # ── num_users: unique members across all bot channels ─────────────────
     bot_id = client.auth_test()["user_id"]
+    team_id = get_team_id(client)
     users = set()
-    for ch in client.users_conversations(types="public_channel")["channels"]:
-        users.update(client.conversations_members(channel=ch["id"])["members"])
+    kwargs = {"types": "public_channel"}
+    if team_id:
+        kwargs["team_id"] = team_id
+    for ch in paginate(client.users_conversations, "channels", **kwargs):
+        users.update(paginate(client.conversations_members, "members", channel=ch["id"]))
     users.discard(bot_id)
     # ── workday_frac: non-holiday weekdays in current ISO week / 5 ───────
     today = date.today()

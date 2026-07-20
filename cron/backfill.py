@@ -41,8 +41,7 @@ def main():
     with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
         register_vector(conn)
         backfill_embeddings(conn)
-    with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
-        register_vector(conn)
+        conn.commit()
         backfill_clusters(conn)
     print("Backfill complete.")
 
@@ -64,7 +63,7 @@ def backfill_embeddings(conn):
 def _fit_clusters(embeddings, k, prev_centers, sample_weight):
     if prev_centers is not None and len(prev_centers) <= k:
         init = prev_centers if len(prev_centers) == k else \
-            np.vstack([prev_centers, KMeans(n_clusters=k - len(prev_centers), n_init=1).fit(embeddings).cluster_centers_])
+            np.vstack([prev_centers, KMeans(n_clusters=k - len(prev_centers), n_init=1).fit(embeddings, sample_weight=sample_weight).cluster_centers_])
         return KMeans(n_clusters=k, init=init, n_init=1).fit(embeddings, sample_weight=sample_weight)
     return KMeans(n_clusters=k, n_init=10).fit(embeddings, sample_weight=sample_weight)
 
@@ -86,7 +85,7 @@ def backfill_clusters(conn):
     sample_weight = np.array([1.0 / np.log(1 + month_counts[m]) for m in months])
     prev_centers = conn.execute("SELECT center FROM clusters ORDER BY id").fetchall()
     prev_centers = np.array([r[0] for r in prev_centers]) if prev_centers else None
-    k = min(int(len(month_counts) + 0.75 + 3), len(rows) - 1)
+    k = min(len(month_counts) + 3, len(rows) - 1)
     print(f"Clustering {len(rows)} kudos (k={k})...")
     model = _fit_clusters(embeddings, k, prev_centers, sample_weight)
     labels = model.labels_
