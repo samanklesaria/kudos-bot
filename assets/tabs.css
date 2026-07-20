@@ -1,0 +1,3 @@
+@media (max-width: 768px) {
+    .tab-container { flex-direction: row !important; }
+}

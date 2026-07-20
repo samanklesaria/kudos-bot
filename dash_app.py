@@ -145,12 +145,13 @@ _grid_opts = {"pagination": True, "paginationPageSize": 20,
     "rowStyle": {"paddingTop": "2px", "paddingBottom": "2px"}}
 _col_defs = {"resizable": True, "sortable": True,
     "wrapText": True, "autoHeight": True, "cellStyle": {"lineHeight": "1.4"}}
-_msg_cols = [{"field": "giver", "flex": 1}, {"field": "recipient", "flex": 1},
-    {"field": "message", "flex": 11}]
+_msg_cols = [{"field": "giver", "flex": 2}, {"field": "message", "flex": 9}]
+_msg_cols_with_recipient = [{"field": "giver", "flex": 2}, {"field": "recipient", "flex": 2},
+    {"field": "message", "flex": 7}]
 
 app.layout = dbc.Container([
     html.H1("Kudos Dashboard", className="my-2"),
-    dcc.Tabs([
+    dcc.Tabs(children=[
         dcc.Tab(label="Usage & Budget", children=[
             html.Div(style=_scroll, children=[
                 dbc.Row(id="snapshot", className="g-2 my-2"),
@@ -270,7 +271,7 @@ def update_usage(_):
     budget, spent, overflow = load_snapshot()
     snap = [dbc.Col(dbc.Card(dbc.CardBody([
         html.H6(label, className="card-subtitle text-muted"),
-        html.H3(f"{val} pts")]), className="shadow-sm"), md=4)
+        html.H3(f"{val} pts")]), className="shadow-sm"), md=4, xs=4)
         for label, val in [("Monthly Budget", budget), ("Spent This Month", spent), ("Overflowed This Month", overflow)]]
     df = load_weekly()
     if df.empty:
@@ -338,7 +339,7 @@ def update_stream(_):
     Input("enriched-click", "data"),
     State("stream-data", "data"))
 def drill_topic(click, store):
-    cols = _msg_cols
+    cols = _msg_cols_with_recipient
     if not click or not store:
         return "Click a band to see messages.", cols, []
     pt = click["points"][0]
