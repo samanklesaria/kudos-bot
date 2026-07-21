@@ -1,5 +1,9 @@
 # Kudos Bot
 
+<img src="kudos_icon.png" style="zoom:20%;" />
+
+
+
 A Slack peer-recognition system where employees publicly appreciate each other's work. Kudos accumulate as points that convert to real dollar payouts, with the conversion rate and monthly budget controlled by accounting.
 
 ## Design Principles
