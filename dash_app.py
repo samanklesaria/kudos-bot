@@ -112,7 +112,7 @@ def fit_its(df):
     df = df.dropna(subset=["exposure"])
     rate_month = df.groupby("conversion_rate")["ym"].first()
     agg = df.groupby("conversion_rate").agg(
-        count=("acquired", "sum"), exposure=("exposure", "sum")).sort_index()
+        count=("acquired", "sum"), redeemed=("redeemed", "sum"), exposure=("exposure", "sum")).sort_index()
     if len(agg) < 2:
         return pd.DataFrame(), None
     rows = []
@@ -123,11 +123,11 @@ def fit_its(df):
         irr = (b["count"] / b["exposure"]) / (a["count"] / a["exposure"])
         rows.append(dict(month=rate_month[r2], rate=r2, irr=irr, lo=lo, hi=hi))
     irr_df = pd.DataFrame(rows)
-    # Forecast next week — scale rate by last week's exposure to get counts
+    # Forecast next week's redeemed points — scale last period's redeemed rate by last week's exposure
     last = agg.iloc[-1]
     last_rate = agg.index[-1]
     last_exposure = df.loc[df["conversion_rate"] == last_rate, "exposure"].iloc[-1]
-    mu = last["count"] / last["exposure"] * last_exposure
+    mu = last["redeemed"] / last["exposure"] * last_exposure
     lo = stats.poisson.ppf(0.025, mu)
     hi = stats.poisson.ppf(0.975, mu)
     return irr_df, dict(median=mu, lo=lo, hi=hi)
@@ -229,8 +229,8 @@ def _add_forecast(fig, df):
         irr_df, fc = fit_its(df[weeks_per_month >= 4])
         fx = df["x"].max() + 2
         fig.add_trace(go.Scatter(x=[fx], y=[fc["median"]], mode="markers",
-            marker=dict(symbol="diamond", size=10, color="#50B86C"),
-            name="Forecast (acquired)", error_y=dict(type="data", symmetric=False,
+            marker=dict(symbol="diamond", size=10, color="#4A90D9"),
+            name="Forecast (redeemed)", error_y=dict(type="data", symmetric=False,
                 array=[fc["hi"] - fc["median"]], arrayminus=[fc["median"] - fc["lo"]])))
         next_month = pd.Timestamp(df["ym"].iloc[-1] + "-01") + pd.DateOffset(months=1)
         tv = fig.layout.xaxis.tickvals

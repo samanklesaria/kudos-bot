@@ -78,27 +78,33 @@ $fn$;
 -- and deletions, preventing races like two concurrent gives bypassing the daily cap.
 CREATE FUNCTION try_redeem(p_as_of TIMESTAMPTZ DEFAULT NOW())
 RETURNS TABLE(redeemed_user_ids VARCHAR[], notify_budget_exhausted BOOLEAN) AS $fn$
-DECLARE v_remaining INTEGER;
+DECLARE
+    v_remaining INTEGER;
+    v_give INTEGER[];
+    v_recv INTEGER[];
+    v_rn   BIGINT[];
 BEGIN
-    PERFORM pg_advisory_xact_lock(hashtext('try_redeem'));  -- reentrant if caller already holds it
+    PERFORM pg_advisory_xact_lock(hashtext('try_redeem'));
     v_remaining := remaining_budget(p_as_of::date);
+    SELECT array_agg(give_id ORDER BY rn),
+           array_agg(receive_id ORDER BY rn),
+           array_agg(rn ORDER BY rn)
+      INTO v_give, v_recv, v_rn
+      FROM to_redeem;
+
+    UPDATE kudos k SET redeems = p.receive_id
+    FROM unnest(v_give, v_recv) AS p(give_id, receive_id)
+    WHERE k.id = p.give_id;
+
     RETURN QUERY
-    WITH pairs AS (
-        SELECT rn, give_id, receive_id FROM to_redeem
-    ),
-    redeemed AS (
-        UPDATE kudos SET redeemed_at = p_as_of, overflow = pairs.rn > v_remaining
-        FROM pairs
-        WHERE kudos.id = pairs.receive_id
-        RETURNING recipient_id
-    ),
-    linked AS (
-        UPDATE kudos SET redeems = p.receive_id
-        FROM pairs p WHERE kudos.id = p.give_id AND p.rn <= v_remaining
+    WITH redeemed AS (
+        UPDATE kudos k SET redeemed_at = p_as_of, overflow = p.rn > v_remaining
+        FROM unnest(v_recv, v_rn) AS p(receive_id, rn)
+        WHERE k.id = p.receive_id
+        RETURNING k.recipient_id
     )
-    SELECT
-        COALESCE(array_agg(DISTINCT recipient_id), '{}'),
-        count(*) >= v_remaining AND v_remaining > 0
+    SELECT COALESCE(array_agg(DISTINCT recipient_id), '{}'),
+           count(*) >= v_remaining AND v_remaining > 0
     FROM redeemed;
 END;
 $fn$ LANGUAGE plpgsql;
@@ -142,8 +148,9 @@ SELECT yw, ym, acquired, redeemed, b.point_budget, b.conversion_rate FROM (
     SELECT to_char(k.created_at, 'IYYY-IW') AS yw,
            to_char(date_trunc('week', min(k.created_at))::date + 3, 'YYYY-MM') AS ym,
            COUNT(*)::int AS acquired,
-           COUNT(*) FILTER (WHERE k.redeems IS NOT NULL)::int AS redeemed
+           COUNT(*) FILTER (WHERE k.redeems IS NOT NULL AND NOT r.overflow)::int AS redeemed
     FROM kudos k
+    LEFT JOIN kudos r ON r.id = k.redeems
     GROUP BY yw) w
 JOIN LATERAL effective_budget((w.ym || '-01')::date) b ON TRUE
 ORDER BY yw;

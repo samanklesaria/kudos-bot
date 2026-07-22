@@ -315,16 +315,21 @@ def test_redeems_column_set(conn):
     redeemer = conn.execute("SELECT redeems FROM kudos WHERE message_ts = '1.002'").fetchone()[0]
     assert redeemer == redeemed_id
 
-def test_overflow_give_relinks_with_new_receive(conn):
-    """After overflow, unlinked gives can pair with new receives when budget is available."""
-    # No budget → all redemptions overflow, gives stay unlinked
+def test_overflow_give_is_consumed_not_relinked(conn):
+    """An overflowed give is spent (linked to its overflowed receive), so it does not
+    re-pair with a later receive and starve future budgets."""
+    # No budget → the redemption overflows, but the give is still consumed
     _give(conn, "U2", "U1", "1.001", backdate_days=3)
     _give(conn, "U1", "U3", "1.002", backdate_days=2)
-    assert conn.execute("SELECT redeems FROM kudos WHERE message_ts = '1.002'").fetchone()[0] is None
-    # Add budget, then give U1 a new receive — try_redeem pairs U1's unlinked give with it
+    receive_id = conn.execute("SELECT id FROM kudos WHERE message_ts = '1.001'").fetchone()[0]
+    assert conn.execute("SELECT redeems FROM kudos WHERE message_ts = '1.002'").fetchone()[0] == receive_id
+    assert conn.execute("SELECT overflow FROM kudos WHERE message_ts = '1.001'").fetchone()[0] is True
+    # Add budget and give U1 a new receive — the spent give stays put; the new receive
+    # is not redeemed via the old give.
     _set_budget(conn, points=100, rate=5.0)
     _give(conn, "U4", "U1", "1.003", backdate_days=1)
-    assert conn.execute("SELECT redeems FROM kudos WHERE message_ts = '1.002'").fetchone()[0] is not None
+    assert conn.execute("SELECT redeems FROM kudos WHERE message_ts = '1.002'").fetchone()[0] == receive_id
+    assert conn.execute("SELECT redeemed_at FROM kudos WHERE message_ts = '1.003'").fetchone()[0] is None
 
 def test_delete_nonexistent_is_noop(conn):
     """delete_kudos on a channel/ts with no kudos is a safe no-op."""

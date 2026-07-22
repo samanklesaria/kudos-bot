@@ -2,7 +2,7 @@
 
 Seed data is loaded from a pg_dump fixture. To regenerate:
     uv run python -c "from simulate import main; main()"  # requires LLM servers
-    pg_dump --no-owner --clean --if-exists $KUDOS_TEST_DATABASE_URL -f tests/fixtures/kudos_test.sql
+    pg_dump --no-owner --clean --if-exists $DATABASE_URL -f tests/fixtures/kudos_test.sql
 """
 import os
 import subprocess

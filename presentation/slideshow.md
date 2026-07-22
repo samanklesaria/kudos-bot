@@ -1,5 +1,19 @@
 # Kudos Bot
 
+\begin{columns}[T]
+\begin{column}{0.43\textwidth}
+\includegraphics[width=\textwidth]{screenshots/welcome.png}\\[6pt]
+\includegraphics[width=\textwidth]{screenshots/llm_gate.png}
+\end{column}
+\begin{column}{0.43\textwidth}
+\includegraphics[width=\textwidth]{screenshots/basic_message.png}\\[6pt]
+\includegraphics[width=\textwidth]{screenshots/no_private.png}\\[6pt]
+\includegraphics[width=\textwidth]{screenshots/accounting.png}
+\end{column}
+\end{columns}
+
+# Features
+
 ```mermaid
 graph TD
     A["<b>Simple for the giver</b><br>@kudos @jane Great retro!"] --> B["<b>Hard to game</b><br>Rate limits, public channels,<br>LLM content gate"]
@@ -47,27 +61,13 @@ Monthly point budget and conversion rate set by accounting. Over-budget kudos ar
 
 Bob's second receipt arrived after the budget was exhausted — it overflows and he earns nothing despite otherwise being owed.
 
-# Screenshots
-
-\begin{columns}[T]
-\begin{column}{0.43\textwidth}
-\includegraphics[width=\textwidth]{screenshots/welcome.png}\\[6pt]
-\includegraphics[width=\textwidth]{screenshots/llm_gate.png}
-\end{column}
-\begin{column}{0.43\textwidth}
-\includegraphics[width=\textwidth]{screenshots/basic_message.png}\\[6pt]
-\includegraphics[width=\textwidth]{screenshots/no_private.png}\\[6pt]
-\includegraphics[width=\textwidth]{screenshots/accounting.png}
-\end{column}
-\end{columns}
-
 # Dashboard Demo
 
 Live demo: operational snapshot, usage & budget forecast, treatment effect plot, leaderboard, and topic drill-down.
 
 # Architecture
 
-All business logic lives in Postgres functions. The Python app is a 136-line event router. 33 automated tests cover all business logic.
+All business logic lives in Postgres functions, wrapped in Python with slack-bolt. 48 automated tests cover all business logic. Edits delete the old kudos (un-redeeming linked points) and re-evaluate from scratch. The dashboard uses Plotly Dash.
 
 ```mermaid
 graph LR
@@ -77,9 +77,11 @@ graph LR
     GK --> TR["try_redeem()<br>redeem or overflow"]
     TR --> A
     A --> Reply["Post reply"]
+    GK -.-> PG[("Postgres<br>views")]
+    PG --> D["dash_app.py<br>dashboard"]
 ```
 
-Edits delete the old kudos (un-redeeming linked points) and re-evaluate from scratch.
+
 
 # Scheduled Jobs
 
@@ -182,4 +184,4 @@ Schema migrations via `pg-schema-diff` — declarative SQL, no migration files.
 - Anti-abuse enforced structurally, not by policy
 - Reciprocity to encourage participation
 - Causal measurement of budget impact on activity
-- 845 lines of code, 33 tests including browser automations
+- 845 lines of code, 48 tests including browser automations
